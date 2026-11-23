@@ -1,13 +1,3 @@
-// YieldRadar's value model: one snapshot of the protocol universe in, one ranked board out.
-// Implied value follows only from the snapshot's own figures. Markets price tokens at some multiple
-// of the value users deposit (TVL), so the model derives each category's multiple from the protocols
-// whose tokens already trade, damped toward the blended market multiple, then applies it to the
-// pre-token protocols, shaped by 7-day growth and by how long each has run with no token:
-//   implied = round( tvl_usd x category_multiple x trend x patience )
-// Nothing is hardcoded: the same function scores every protocol, and the fit is verified by holding
-// each peer out (LOO), by a temporal walk-forward split, by a per-feature ablation, and by a Brier
-// score on the token-odds estimate.
-
 import { actionFor, capitalFor, chainOf, farmSteps, farmVerdict, gasFor, holdDaysFor, stepText, watchFor } from './plans.ts';
 
 export interface SnapshotProtocol {
@@ -30,12 +20,11 @@ export const MODEL: ModelConstants = {
   damping: 0.6, multiple_min: 0.05, multiple_max: 8, implied_max: 99_000_000_000_000,
 };
 export const MODEL_VERSION = 'yieldradar-3';
-/** Early (non-watchlist) rows the board carries, below the snapshot's TVL floor. */
+
 export const EARLY_ROWS = 210;
-/** Token-bearing rows the live view carries, by market cap. */
+
 export const LIVE_ROWS = 20;
 
-/** A protocol whose token already trades. The snapshot's nulls say "not recorded", never "none". */
 export function hasToken(p: SnapshotProtocol): boolean {
   return p.mcap_usd !== null || p.gecko_id !== null || p.symbol !== null;
 }
@@ -44,19 +33,18 @@ function finite(value: unknown, fallback: number): number {
 }
 const DAY_MS = 86_400_000;
 
-/** Whole days from `listedAt` to the snapshot's `asOf`, clamped at zero; null when either is absent. */
 export function ageDays(asOf: string, listedAt: string | null): number | null {
   if (listedAt === null) return null;
   const a = Date.parse(`${asOf}T00:00:00Z`), b = Date.parse(`${listedAt}T00:00:00Z`);
   return Number.isFinite(a) && Number.isFinite(b) ? Math.max(0, Math.floor((a - b) / DAY_MS)) : null;
 }
-/** The median of a list (average of the two middle values when the count is even). */
+
 export function median(values: number[]): number {
   if (values.length === 0) return NaN;
   const s = values.slice().sort((a, b) => a - b), mid = s.length >> 1;
   return s.length % 2 === 1 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
 }
-/** The p-th quantile (0..1) of a list. */
+
 export function quantile(values: number[], p: number): number {
   if (values.length === 0) return NaN;
   const s = values.slice().sort((a, b) => a - b), at = (s.length - 1) * p;
@@ -66,14 +54,11 @@ export function quantile(values: number[], p: number): number {
 export function clamp(n: number, lo: number, hi: number): number { return Math.min(hi, Math.max(lo, n)); }
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
 
-// ---------------------------------------------------------------- comparables fit
-
-/** One peer observation: a token-bearing protocol's mcap/TVL multiple. */
 export interface Peer {
   slug: string; name: string; category: string; ratio: number;
   log_ratio: number; log10_tvl: number; growth: number | null; listed_at: string | null;
 }
-/** The token-bearing protocols' observations: CEX and sub-$1M TVL rows left out. */
+
 export function collectPeers(protocols: SnapshotProtocol[]): Peer[] {
   const peers: Peer[] = [];
   for (const p of protocols) {
@@ -88,16 +73,12 @@ export function collectPeers(protocols: SnapshotProtocol[]): Peer[] {
   }
   return peers;
 }
-/** The robust multiple of one group of peers: the geometric mean of their mcap/TVL ratios. */
+
 function groupMultiple(peers: Peer[]): number {
   return peers.length === 0 ? NaN : Math.exp(median(peers.map((p) => p.log_ratio)));
 }
 export interface CategoryFit { multiple: number; peers: number }
-/**
- * Category multiples, each damped `damping` of the way toward the blended multiple of every
- * token-bearing protocol: a category carried by one unusual peer prices like the market at large
- * rather than like its outlier. A category with no peer inherits the blended multiple outright.
- */
+
 export function fitMultiples(peers: Peer[], model: ModelConstants): { blended: number; byCategory: Map<string, CategoryFit> } {
   const blended = groupMultiple(peers);
   const groups = groupBy(peers, (p) => p.category);
@@ -116,21 +97,18 @@ function groupBy<T>(items: T[], key: (item: T) => string): Map<string, T[]> {
   }
   return groups;
 }
-/** The multiple a protocol uses: its category's damped multiple, else the blend. */
+
 export function multipleFor(category: string | null, byCategory: Map<string, CategoryFit>, blended: number, model: ModelConstants): { multiple: number; source: string } {
   const entry = category === null ? undefined : byCategory.get(category);
-  if (entry === undefined) return { multiple: clamp(blended, model.multiple_min, model.multiple_max), source: 'blended market multiple (no token-bearing peer in this category)' };
-  return { multiple: entry.multiple, source: `geometric mean of ${entry.peers} token-bearing ${category} peer${entry.peers === 1 ? '' : 's'}, damped ${Math.round((1 - model.damping) * 100)}/${Math.round(model.damping * 100)} toward the market blend` };
+  if (entry === undefined) return { multiple: clamp(blended, model.multiple_min, model.multiple_max), source: 'blended market multiple — no token-bearing peer in this category' };
+  return { multiple: entry.multiple, source: `median of ${entry.peers} token-bearing ${category} peers, damped ${Math.round((1 - model.damping) * 100)}/${Math.round(model.damping * 100)} toward the blend` };
 }
 
-// ---------------------------------------------------------------- scoring
-
-/** The trend multiplier from a 7-day change: growth raises the estimate, a rout cuts it. */
 export function trendMultiplier(change7d: number | null, model: ModelConstants): { mult: number; trend: number } {
   const trend = clamp(finite(change7d, 0), model.trend_floor, model.trend_cap);
   return { mult: 1 + (trend / 100) * model.growth_weight, trend };
 }
-/** The scarcity discount: a protocol that has run longer with no token is priced lower, not higher. */
+
 export function patienceMultiplier(age: number | null, model: ModelConstants): { mult: number; age: number } {
   const a = age ?? model.unknown_age_days;
   return { mult: model.patience_floor + (1 - model.patience_floor) * (Math.min(Math.max(a, 0), model.patience_days) / model.patience_days), age: a };
@@ -139,18 +117,16 @@ export interface ScoredInputs {
   multiple: number; multiple_source: string; trend_pct: number; trend_mult: number;
   patience_mult: number; age_days: number | null; implied: number;
 }
-/** The page recomputes a row from its figures; this is the arithmetic both sides share. */
+
 export function impliedFromFigures(tvlUsd: number, multiple: number, trendMult: number, patienceMult: number): number {
   return Math.max(1, Math.round(tvlUsd * multiple * trendMult * patienceMult));
 }
-/** Score one protocol: TVL x category multiple x trend x patience, clamped to the model's band. */
+
 export function scoreProtocol(p: SnapshotProtocol, asOf: string, byCategory: Map<string, CategoryFit>, blended: number, model: ModelConstants): ScoredInputs {
   const m = multipleFor(p.category, byCategory, blended, model);
   const t = trendMultiplier(p.change_7d, model);
   const age = ageDays(asOf, p.listed_at);
   const pat = patienceMultiplier(age, model);
-  // The page recomputes the value from the rounded multipliers the data carries, so the board must
-  // score from those same rounded figures, never from the unrounded ones.
   const trendMult = round4(t.mult), patienceMult = round4(pat.mult);
   return {
     multiple: m.multiple, multiple_source: m.source, trend_pct: t.trend, trend_mult: trendMult,
@@ -159,31 +135,30 @@ export function scoreProtocol(p: SnapshotProtocol, asOf: string, byCategory: Map
   };
 }
 
-// ---------------------------------------------------------------- validation
-
-/** Held-out prediction for one peer: its category's multiple refitted without it, else the blend. */
 function heldOutMultiple(peers: Peer[], category: string, heldOut: string, model: ModelConstants, blended: number): number {
   const train = peers.filter((p) => p.slug !== heldOut && p.category === category);
   const raw = train.length > 0 ? groupMultiple(train) : blended;
   return clamp(raw * (1 - model.damping) + blended * model.damping, model.multiple_min, model.multiple_max);
 }
-/** The peers' LOO prediction/actual ratios, once per peer: the raw material of every check below. */
-function looRatios(peers: Peer[], model: ModelConstants): { slug: string; category: string; r: number; listed_at: string | null }[] {
+
+function looRatios(peers: Peer[], model: ModelConstants): { slug: string; category: string; pred: number; r: number; listed_at: string | null }[] {
   const blended = groupMultiple(peers);
-  return peers.map((peer) => ({ slug: peer.slug, category: peer.category, listed_at: peer.listed_at, r: heldOutMultiple(peers, peer.category, peer.slug, model, blended) / peer.ratio }));
+  return peers.map((peer) => {
+    const pred = heldOutMultiple(peers, peer.category, peer.slug, model, blended);
+    return { slug: peer.slug, category: peer.category, listed_at: peer.listed_at, pred, r: pred / peer.ratio };
+  });
 }
-/** Leave-one-out over the mcap/TVL multiple: median abs error, band shares, Pearson r on logs. */
+
 export function leaveOneOut(peers: Peer[], model: ModelConstants) {
   const rs = looRatios(peers, model);
   const errs = rs.map((x) => Math.abs(x.r - 1));
   const n = peers.length;
-  const pred = rs.map((x) => Math.log(x.r)), actual = peers.map((p) => p.log_ratio);
   return {
     peers: n,
     median_absolute_error: round4(median(errs)),
     within_half: n ? round4(rs.filter((x) => x.r >= 0.5 && x.r <= 2).length / n) : 0,
     within_third: n ? round4(rs.filter((x) => x.r >= 1 / 3 && x.r <= 3).length / n) : 0,
-    correlation: n < 3 ? 0 : round4(pearson(pred, actual)),
+    correlation: n < 3 ? 0 : round4(pearson(rs.map((x) => Math.log(x.pred)), peers.map((p) => Math.log(p.ratio)))),
   };
 }
 function pearson(xs: number[], ys: number[]): number {
@@ -194,10 +169,7 @@ function pearson(xs: number[], ys: number[]): number {
   for (let i = 0; i < n; i++) { const dx = xs[i]! - mx, dy = ys[i]! - my; num += dx * dy; dx2 += dx * dx; dy2 += dy * dy; }
   return dx2 === 0 || dy2 === 0 ? 0 : num / Math.sqrt(dx2 * dy2);
 }
-/**
- * Walk-forward: fit on peers listed by the split date (older 60%), price peers listed after it.
- * Returns null when fewer than 16 dated peers cannot give both halves 8.
- */
+
 export function walkForward(peers: Peer[], model: ModelConstants, asOf: string) {
   const dated = peers
     .filter((p) => p.listed_at !== null && Date.parse(`${p.listed_at}T00:00:00Z`) < Date.parse(`${asOf}T00:00:00Z`))
@@ -212,7 +184,8 @@ export function walkForward(peers: Peer[], model: ModelConstants, asOf: string) 
     const list = trainGroups.get(category);
     return clamp((list === undefined ? trainBlended : groupMultiple(list)) * (1 - model.damping) + trainBlended * model.damping, model.multiple_min, model.multiple_max);
   };
-  const rs = test.map((peer) => trainMultipleOf(peer.category) / peer.ratio);
+  const preds = test.map((peer) => trainMultipleOf(peer.category));
+  const rs = test.map((peer, i) => preds[i]! / peer.ratio);
   const mae = median(rs.map((r) => Math.abs(r - 1)));
   const looMae = median(looRatios(peers, model).map((x) => Math.abs(x.r - 1)));
   if (!Number.isFinite(mae) || !Number.isFinite(looMae) || looMae <= 0) return null;
@@ -222,10 +195,10 @@ export function walkForward(peers: Peer[], model: ModelConstants, asOf: string) 
     mae_vs_loo: round4((mae - looMae) / looMae), median_absolute_error: round4(mae),
     within_half: round4(rs.filter((r) => r >= 0.5 && r <= 2).length / rs.length),
     within_third: round4(rs.filter((r) => r >= 1 / 3 && r <= 3).length / rs.length),
-    correlation: round4(pearson(rs.map((r) => Math.log(r)), test.map((p) => Math.log(p.ratio)))),
+    correlation: round4(pearson(preds.map((p) => Math.log(p)), test.map((p) => Math.log(p.ratio)))),
   };
 }
-/** Band honesty of the final fit: the share of peers whose true multiple sits in each band. */
+
 export function rangeHonesty(peers: Peer[], model: ModelConstants) {
   const blended = groupMultiple(peers);
   const byCategory = new Map<string, number>();
@@ -242,12 +215,8 @@ export function rangeHonesty(peers: Peer[], model: ModelConstants) {
   };
 }
 
-// ---------------------------------------------------------------- out-of-sample evidence
-
-/** One ablation row: a feature set, its held-out miss multiplier, its band coverage, kept or not. */
 export interface AblationRow { label: string; kept: boolean; loo_miss: number; wf_miss: number; cov50: number; cov80: number; note: string }
 
-/** Solve A x = b by Gaussian elimination; null when singular. */
 function solve(A: number[][], b: number[]): number[] | null {
   const n = b.length;
   const M = A.map((row, i) => [...row, b[i]!]);
@@ -265,10 +234,6 @@ function solve(A: number[][], b: number[]): number[] | null {
   return M.map((row, i) => row[n]! / row[i]!);
 }
 
-/**
- * Least squares of log10(mcap/TVL) on [1, log10 TVL, 7d growth, category dummies], per variant.
- * Dummies only for categories with 5+ peers; thinner categories ride the intercept.
- */
 function fitOLS(peers: Peer[], useSize: boolean, useGrowth: boolean, useCategory: boolean) {
   const cats = useCategory
     ? [...groupBy(peers, (p) => p.category).entries()].filter(([, l]) => l.length >= 5).map(([c]) => c).sort()
@@ -289,7 +254,7 @@ function fitOLS(peers: Peer[], useSize: boolean, useGrowth: boolean, useCategory
   const beta = solve(A, b) ?? Array.from({ length: k }, () => 0);
   return { cats, beta, predict: (p: Peer) => row(p).reduce((s, xj, j) => s + xj * beta[j]!, 0) };
 }
-/** LOO and walk-forward prediction/actual ratios for one variant, plus the full fit's beta. */
+
 function variantRatios(peers: Peer[], variant: string): { loo: number[]; wf: number[] | null; beta: number[] } {
   const useSize = variant !== 'base';
   const useGrowth = variant === 'size+growth' || variant === 'size+growth+category';
@@ -309,13 +274,6 @@ function variantRatios(peers: Peer[], variant: string): { loo: number[]; wf: num
   return { loo, wf, beta: useSize ? fitOLS(peers, true, useGrowth, useCategory).beta : [] };
 }
 
-/**
- * The evidence table: base rate / size only / size+growth / size+growth+category, each scored by
- * leave-one-out AND walk-forward miss multipliers (median of max(pred/actual, actual/pred)), plus
- * coverage: the share of held-out peers inside the P25-P75 band the OTHER peers' ratios print
- * (honest target 50%) and P10-P90 (target 80%). A feature is kept only when the walk-forward miss
- * improves; 'size+growth' below is the tested-and-not-kept case the table names.
- */
 export function ablationTable(peers: Peer[]): { rows: AblationRow[]; at_1b: number; size_slope: number; growth_coef: number; intercept: number } {
   function coverage(rs: number[], lo: number, hi: number): number {
     if (rs.length < 5) return 0;
@@ -332,10 +290,10 @@ export function ablationTable(peers: Peer[]): { rows: AblationRow[]; at_1b: numb
     cov80: round4(coverage(rs, 0.10, 0.90)),
   });
   const notes: Record<string, string> = {
-    base: 'base rate: one blended mcap/TVL multiple for every peer — kept as the fallback when a category has no peer',
-    size: 'adds the OLS log10 TVL slope: bigger TVL trades at a smaller multiple. Tested, not kept in production — the production model prices size through the robust per-category medians instead',
-    'size+growth': 'adds 7d growth to the OLS fit: tested and NOT kept — the walk-forward miss does not beat size alone, so growth enters the production model as the clamped trend multiplier',
-    'size+growth+category': 'adds category dummies (5+ peers each): category is KEPT, in robust-median form with damping — this OLS row is its lab check',
+    base: 'base rate: one blended mcap/TVL multiple for every peer — kept as the fallback',
+    size: 'adds the OLS log10 TVL slope: bigger TVL trades at a smaller multiple. Tested, NOT kept — production prices size through the robust per-category medians',
+    'size+growth': 'adds 7d growth to the fit: tested and NOT kept — the walk-forward miss does not beat size alone; growth enters production as the clamped trend multiplier',
+    'size+growth+category': 'adds category dummies (5+ peers each): category is KEPT, in robust-median damped form — this OLS row is its lab check',
   };
   const variants = ['base', 'size', 'size+growth', 'size+growth+category'];
   const full = variantRatios(peers, 'size+growth+category');
@@ -352,14 +310,6 @@ export function ablationTable(peers: Peer[]): { rows: AblationRow[]; at_1b: numb
   return { rows, intercept: b[0] ?? 0, size_slope: b[1] ?? 0, growth_coef: b[2] ?? 0, at_1b: round4(Math.pow(10, (b[0] ?? 0) + (b[1] ?? 0) * 9)) };
 }
 
-// ---------------------------------------------------------------- token odds + Brier
-
-/**
- * Token-odds from the peers' record, never a forecast: protocols bucket by age band, the band's
- * token-bearing share (smoothed toward the base rate, self excluded) is the estimate, and the
- * Brier score is reported against the base rate's own Brier. This page never says a token will
- * launch; the odds are the record of what similar protocols did.
- */
 export function tokenOdds(snapshot: Snapshot): { base_rate: number; brier_loo: number; brier_base: number; brier_wf: number | null; note: string } {
   const pool = snapshot.protocols.filter((p) => p.category !== 'CEX');
   const base = pool.filter(hasToken).length / pool.length;
@@ -378,7 +328,6 @@ export function tokenOdds(snapshot: Snapshot): { base_rate: number; brier_loo: n
   };
   const brierOf = (pairs: [number, number][]) => pairs.reduce((s, [p, y]) => s + (p - y) ** 2, 0) / pairs.length;
   const looPairs = pool.map((p): [number, number] => [pOf(p, groupBy(pool, band)), hasToken(p) ? 1 : 0]);
-  // walk-forward: bands fitted on protocols listed by the median listing date, tested on the rest
   let wf: number | null = null;
   const dated = pool.filter((p) => p.listed_at !== null).sort((a, b) => (a.listed_at! < b.listed_at! ? -1 : 1));
   if (dated.length >= 16) {
@@ -397,13 +346,8 @@ export function tokenOdds(snapshot: Snapshot): { base_rate: number; brier_loo: n
   };
 }
 
-// ---------------------------------------------------------------- protocol accounting
-
 export interface Accounting { buckets: { label: string; count: number; note: string }[]; total: number; unbucketed: number }
-/**
- * Every protocol in the snapshot lands in exactly one bucket, and the counts sum to the total.
- * No silent drops: the dashboard prints this strip and the sum is checked in the page.
- */
+
 export function accounting(snapshot: Snapshot): Accounting {
   const buckets: { label: string; count: number; note: string }[] = [
     { label: 'ranked watchlist', count: 0, note: 'on the watchlist, pre-token, ranked above' },
@@ -434,8 +378,6 @@ export function accounting(snapshot: Snapshot): Accounting {
   return { buckets, total: snapshot.protocols.length, unbucketed: 0 };
 }
 
-// ---------------------------------------------------------------- board assembly
-
 export interface BoardRow {
   rank: number; slug: string; name: string; category: string | null; chains: string[];
   tvl_usd: number; change_7d: number | null; mcap_usd: number | null; listed_at: string | null;
@@ -460,7 +402,6 @@ export interface RadarData {
   as_of: string; source: string; floor_usd: number; model: ModelConstants; model_version: string;
   watchlist_size: number; board_size: number; early_size: number; live_size: number;
   checksum: string;
-  fit: { blended: number; all_peers: number; all_median_abs_error: number; all_within_2x: number };
   validation: {
     loo: ReturnType<typeof leaveOneOut>;
     walk_forward: ReturnType<typeof walkForward>;
@@ -479,14 +420,13 @@ export interface RadarData {
   live: LiveRow[];
 }
 
-/** DefiLlama's rules: a release-marker name is a pool of another protocol; wrapped/staked names a product of one. */
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 const WRAPPED = /\b(wrapped|staked|staking)\b/i;
-/** Whether a protocol is one the board may rank: no token recorded, not a CEX, not a product of one. */
+
 export function isRankable(p: SnapshotProtocol): boolean {
   return !hasToken(p) && p.category !== 'CEX' && !VERSIONED.test(p.name) && !WRAPPED.test(p.name);
 }
-/** The protocols the board ranks: every watchlist slug first, then the strongest early rows. */
+
 export function pickBoardProtocols(snapshot: Snapshot): SnapshotProtocol[] {
   const index = new Map(snapshot.protocols.map((p) => [p.slug, p]));
   const chosen = new Map<string, SnapshotProtocol>();
@@ -502,21 +442,19 @@ export function pickBoardProtocols(snapshot: Snapshot): SnapshotProtocol[] {
   return [...chosen.values()];
 }
 
-/** What sign of a launch to watch for, from the row's own figures — the same derivation the page shows. */
 export function launchSignals(p: SnapshotProtocol, age: number | null): string[] {
   const out: string[] = [];
   const earlyChains = ['Monad', 'Ink', 'Unichain', 'Arc', 'Plasma', 'Pharos', 'Ripple'];
   const hits = p.chains.filter((c) => earlyChains.includes(c));
-  if (hits.length) out.push(`New-chain incentive: ${p.name} runs on ${hits.join(' and ')}, ${hits.length > 1 ? 'chains' : 'a chain'} still seeding users — watch for a joint points program with the chain itself.`);
-  if (age !== null && age >= 365) out.push(`Maturity: ${Math.floor(age / 365)} year${age >= 730 ? 's' : ''}+ with no token; protocols of this age and TVL class usually launch or get acquired within the next cycle.`);
-  else if (age !== null && age < 180) out.push(`Early: listed ${age} days ago — too new for most launches, but the cheapest time to farm before points programs begin.`);
+  if (hits.length) out.push(`New-chain incentive: ${p.name} runs on ${hits.join(' and ')}, still seeding users — watch for a joint points program with the chain.`);
+  if (age !== null && age >= 365) out.push(`Maturity: ${Math.floor(age / 365)}+ year(s) with no token; peers of this age and TVL class usually launch or get acquired within a cycle.`);
+  else if (age !== null && age < 180) out.push(`Early: listed ${age} days ago — too new for most launches, cheapest time to farm before points begin.`);
   if ((p.change_7d ?? 0) >= 10) out.push(`Capital accelerating: TVL up ${p.change_7d!.toFixed(1)}% in 7 days, the inflow pattern that precedes most announcements.`);
-  if (p.tvl_usd >= 1e9) out.push(`Scale: above $1B of TVL with no token — one of the largest unlaunched protocols in its category.`);
-  out.push(`Baseline: watch ${p.name}'s docs, governance forum and X account for a points program, a claim page on its own domain, or its ticker appearing on CoinGecko.`);
+  if (p.tvl_usd >= 1e9) out.push(`Scale: above $1B TVL with no token — among the largest unlaunched in its category.`);
+  out.push(`Baseline: watch ${p.name}'s docs, forum and X for a points program, a claim page on its own domain, or a CoinGecko ticker.`);
   return out;
 }
 
-/** The live-token protocols, by market cap, for the dashboard's live view. */
 export function liveRows(snapshot: Snapshot, asOf: string): LiveRow[] {
   return snapshot.protocols
     .filter((p) => hasToken(p) && p.category !== 'CEX')
@@ -529,7 +467,7 @@ export function liveRows(snapshot: Snapshot, asOf: string): LiveRow[] {
       listed_at: p.listed_at, age_days: ageDays(asOf, p.listed_at),
     }));
 }
-/** FNV-1a over the ranked rows: the checksum the page recomputes against board.json. */
+
 export function checksumOf(board: BoardRow[]): string {
   let h = 0x811c9dc5;
   for (const r of board) {
@@ -540,17 +478,11 @@ export function checksumOf(board: BoardRow[]): string {
   }
   return h.toString(16).padStart(8, '0');
 }
-/** A compact data.js: the dashboard's whole dataset as one script, no fetch and no network. */
+
 export function dataScript(radar: RadarData): string {
   return `window.RADAR=${JSON.stringify(radar)};\n`;
 }
 
-/**
- * Everything from one snapshot: the scored board (ranks 1..n), the live set set aside, the fit,
- * the validation, the ablation evidence, the odds, the accounting, and the dashboard's compact
- * rows with their farm-plan fields and nearest traded comparables. This is the one function
- * main.ts calls.
- */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
   const peers = collectPeers(snapshot.protocols);
   const { blended, byCategory } = fitMultiples(peers, model);
@@ -572,7 +504,6 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     farm_steps: farmSteps(p, s.age_days).map(stepText),
   }));
 
-  // nearest traded comparables per row: same-category peers first, then any category, each fitted blind
   const compsOf = (p: SnapshotProtocol, tvlUsd: number): Comp[] => {
     const lt = Math.log10(Math.max(tvlUsd, 1));
     const near = peers
@@ -603,8 +534,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     verdict.total_gas = Math.round(verdict.total_gas);
     verdict.capital = Math.round(verdict.capital);
     const exposure = tier >= 2
-      ? `A $${capital} position is moderate here: ${r.name}'s TVL is above $1B, so contract risk is smaller, but never more than you can lose.`
-      : `Keep the position near $${capital}: ${r.name} is ${r.tvl_usd >= 100_000_000 ? 'a mid-size' : 'a small'} protocol with no token yet, so its contracts are less battle-tested.`;
+      ? `A $${capital} position is moderate here: TVL above $1B means smaller contract risk — but never more than you can lose.`
+      : `Keep the position near $${capital}: ${r.name} is ${r.tvl_usd >= 1e8 ? 'a mid-size' : 'a small'} protocol with no token yet, so its contracts are less battle-tested.`;
     return {
       rank: r.rank, slug: r.slug, name: r.name, category: r.category, chains: r.chains,
       tvl_usd: r.tvl_usd, change_7d: r.change_7d, listed_at: r.listed_at, age_days: r.age_days,
@@ -623,7 +554,6 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     model, model_version: MODEL_VERSION, checksum: checksumOf(board),
     watchlist_size: snapshot.watchlist.length, board_size: board.length,
     early_size: board.filter((r) => !watchlist.has(r.slug)).length, live_size: live.length,
-    fit: { blended: round4(blended), all_peers: peers.length, all_median_abs_error: 0, all_within_2x: 0 },
     validation: {
       loo: leaveOneOut(peers, model), walk_forward: walkForward(peers, model, snapshot.as_of),
       range_honesty: rangeHonesty(peers, model),
@@ -645,70 +575,61 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   return { board, radar };
 }
 
-// ---------------------------------------------------------------- snapshot parsing
-
 export class SnapshotError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'SnapshotError';
   }
 }
-/** The snapshot out of a file's text, refused unless it is the shape the model scores. */
+
 export function parseSnapshot(text: string): Snapshot {
   let raw: unknown;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    throw new SnapshotError('snapshot.json is not JSON');
-  }
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new SnapshotError('snapshot.json is not a JSON object');
+  try { raw = JSON.parse(text); } catch { throw new SnapshotError('snapshot.json is not JSON'); }
   const o = raw as Record<string, unknown>;
-  if (typeof o.as_of !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(o.as_of)) throw new SnapshotError('snapshot.json has no as_of date');
-  if (typeof o.source !== 'string') throw new SnapshotError('snapshot.json has no source');
-  if (typeof o.floor_usd !== 'number' || !Number.isSafeInteger(o.floor_usd) || o.floor_usd <= 0) throw new SnapshotError('snapshot.json has no floor_usd');
-  if (!Array.isArray(o.protocols)) throw new SnapshotError('snapshot.json has no protocols array');
-  if (!Array.isArray(o.watchlist) || o.watchlist.some((s) => typeof s !== 'string')) throw new SnapshotError('snapshot.json has no watchlist of slugs');
+  const bad = (why: string): never => { throw new SnapshotError(`snapshot.json ${why}`); };
+  if (typeof o !== 'object' || o === null || Array.isArray(o)) bad('is not a JSON object');
+  if (typeof o.as_of !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(o.as_of)) bad('has no as_of date');
+  if (typeof o.source !== 'string') bad('has no source');
+  if (typeof o.floor_usd !== 'number' || !Number.isSafeInteger(o.floor_usd) || o.floor_usd <= 0) bad('has no floor_usd');
+  if (!Array.isArray(o.protocols) || !Array.isArray(o.watchlist) || o.watchlist.some((s) => typeof s !== 'string')) bad('lacks protocols or a watchlist of slugs');
+  const num = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) ? v : null;
+  const str = (v: unknown): string | null => typeof v === 'string' ? v : null;
   const protocols = o.protocols.map((v, i): SnapshotProtocol => {
-    if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new SnapshotError(`snapshot.json's protocol ${i} is not an object`);
+    if (typeof v !== 'object' || v === null || Array.isArray(v)) bad(`protocol ${i} is not an object`);
     const p = v as Record<string, unknown>;
-    if (typeof p.slug !== 'string' || typeof p.name !== 'string' || typeof p.tvl_usd !== 'number' || !Number.isFinite(p.tvl_usd)) {
-      throw new SnapshotError(`snapshot.json's protocol ${i} lacks a slug, a name or a TVL`);
-    }
+    if (typeof p.slug !== 'string' || typeof p.name !== 'string' || !Number.isFinite(p.tvl_usd as number)) bad(`protocol ${i} lacks a slug, a name or a TVL`);
     return {
       slug: p.slug, name: p.name,
-      category: typeof p.category === 'string' ? p.category : null,
+      category: str(p.category),
       chains: Array.isArray(p.chains) ? p.chains.filter((c): c is string => typeof c === 'string') : [],
-      tvl_usd: p.tvl_usd,
-      change_7d: typeof p.change_7d === 'number' && Number.isFinite(p.change_7d) ? p.change_7d : null,
-      mcap_usd: typeof p.mcap_usd === 'number' && Number.isFinite(p.mcap_usd) ? p.mcap_usd : null,
-      listed_at: typeof p.listed_at === 'string' ? p.listed_at : null,
-      gecko_id: typeof p.gecko_id === 'string' ? p.gecko_id : null,
-      symbol: typeof p.symbol === 'string' ? p.symbol : null,
+      tvl_usd: p.tvl_usd as number, change_7d: num(p.change_7d), mcap_usd: num(p.mcap_usd),
+      listed_at: str(p.listed_at), gecko_id: str(p.gecko_id), symbol: str(p.symbol),
     };
   });
-  return { as_of: o.as_of, source: o.source, floor_usd: o.floor_usd, protocols, watchlist: o.watchlist };
+  return { as_of: o.as_of, source: o.source, floor_usd: o.floor_usd, protocols, watchlist: o.watchlist as string[] };
 }
 
-/** Why a board is not one the gate will take, or null: coverage, ranks, order, spread, steps. */
 export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null {
   const slugs = new Set(board.map((r) => r.slug));
   const missing = snapshot.watchlist.filter((s) => !slugs.has(s));
-  if (missing.length > 0) return `the board misses ${missing.length} watchlist slug${missing.length === 1 ? '' : 's'}: ${missing.slice(0, 5).join(', ')}`;
+  if (missing.length > 0) return `the board misses ${missing.length} watchlist slugs: ${missing.slice(0, 5).join(', ')}`;
   if (board.length < 100) return `the board holds ${board.length} rows, under the 100 the gate asks`;
   for (let i = 0; i < board.length; i++) if (board[i]!.rank !== i + 1) return `rank ${i + 1} is ${board[i]!.rank}`;
   for (let i = 1; i < board.length; i++) if (board[i]!.implied_value_usd > board[i - 1]!.implied_value_usd) return `row ${i + 1} outranks row ${i} on implied value`;
   if (board.length >= 2 && board[0]!.implied_value_usd === board[board.length - 1]!.implied_value_usd) {
-    return `all ${board.length} rows share the same implied value $${board[0]!.implied_value_usd}`;
+    return `all rows share implied value $${board[0]!.implied_value_usd}`;
   }
   const seen = new Set<string>();
   for (const r of board) {
     if (seen.has(r.slug)) return `${r.slug} appears twice`;
     seen.add(r.slug);
-    if (!Number.isSafeInteger(r.implied_value_usd) || r.implied_value_usd <= 0) return `${r.slug} has implied value ${r.implied_value_usd}`;
-    if (r.farm_steps.length < 3 || r.farm_steps.length > 12) return `${r.slug} has ${r.farm_steps.length} farm steps`;
+    if (!Number.isSafeInteger(r.implied_value_usd) || r.implied_value_usd <= 0) return `${r.slug}: implied ${r.implied_value_usd}`;
+    if (r.farm_steps.length < 3 || r.farm_steps.length > 12) return `${r.slug}: ${r.farm_steps.length} farm steps`;
     for (const s of r.farm_steps) {
-      if (s.trim().length < 20 || s.trim().length > 600) return `${r.slug} has a farm step of ${s.trim().length} characters`;
+      const n = s.trim().length;
+      if (n < 20 || n > 600) return `${r.slug}: farm step of ${n} characters`;
     }
   }
   return null;
 }
+
