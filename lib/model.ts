@@ -18,7 +18,7 @@
 // Nothing is hardcoded: the same function scores every protocol, category multiples are fitted from
 // the snapshot's own token-bearing rows, and the fit is verified by holding each peer out.
 
-import { actionFor, capitalFor, chainOf, farmSteps, gasFor, holdDaysFor, stepText, watchFor } from './plans.ts';
+import { actionFor, capitalFor, chainOf, farmSteps, farmVerdict, gasFor, holdDaysFor, stepText, watchFor, type FarmVerdict } from './plans.ts';
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -125,6 +125,7 @@ export interface Peer {
   ratio: number;
   log_ratio: number;
   log_tvl: number;
+  listed_at: string | null;
 }
 
 /** The token-bearing protocols' multiple observations: CEX and sub-$1M TVL rows left out. */
@@ -141,6 +142,7 @@ export function collectPeers(protocols: SnapshotProtocol[]): Peer[] {
       ratio,
       log_ratio: Math.log(ratio),
       log_tvl: Math.log(p.tvl_usd),
+      listed_at: p.listed_at,
     });
   }
   return peers;
@@ -242,6 +244,262 @@ export function scoreProtocol(p: SnapshotProtocol, asOf: string, byCategory: Map
 /** The page recomputes a row from its figures; this is the arithmetic both sides share. */
 export function impliedFromFigures(tvlUsd: number, multiple: number, trendMult: number, patienceMult: number): number {
   return Math.max(1, Math.round(tvlUsd * multiple * trendMult * patienceMult));
+}
+
+// ---------------------------------------------------------------- model validation
+
+/** Result of leave-one-out (LOO) cross-validation over token-bearing peers. */
+export interface LOOResult {
+  peers: number;
+  median_absolute_error: number;
+  within_half: number;
+  within_third: number;
+  correlation: number;
+  per_category: { category: string; peers: number; median_ae: number; within_2x: number; correlation: number }[];
+}
+
+/**
+ * The multiple the model would predict for `category` if fitted on every peer except `heldOut`:
+ * the category's own group multiple when another peer remains, else the blended multiple — the
+ * exact fallback the live model uses for a category with no token-bearing peer.
+ */
+function heldOutMultiple(peers: Peer[], category: string, heldOut: string, model: ModelConstants, blended: number): number {
+  const train = peers.filter((p) => p.slug !== heldOut && p.category === category);
+  const raw = train.length > 0 ? groupMultiple(train) : blended;
+  return clamp(raw * (1 - model.damping) + blended * model.damping, model.multiple_min, model.multiple_max);
+}
+
+/**
+ * Leave-one-out on the mcap/TVL multiple: for every token-bearing peer, refit the model without it,
+ * predict its multiple, and compare with its true mcap/TVL. Reported as the median absolute error,
+ * the share of peers predicted within 0.5-2x and within 0.33-3x, and a Pearson correlation between
+ * predicted and actual multiples on the log scale. A comp-table estimate cannot pin a market cap
+ * tighter than a band; these are the numbers that say how wide the honest band is.
+ */
+export function leaveOneOut(peers: Peer[], model: ModelConstants): LOOResult {
+  const blended = groupMultiple(peers);
+  const preds: number[] = [];
+  const actuals: number[] = [];
+  const errs: number[] = [];
+  let half = 0;
+  let third = 0;
+  for (const peer of peers) {
+    const pred = heldOutMultiple(peers, peer.category, peer.slug, model, blended);
+    const actual = peer.ratio;
+    preds.push(pred);
+    actuals.push(actual);
+    errs.push(Math.abs(pred - actual) / actual);
+    if (pred / actual >= 0.5 && pred / actual <= 2) half++;
+    if (pred / actual >= 0.33 && pred / actual <= 3) third++;
+  }
+  const n = peers.length;
+
+  const groups = new Map<string, Peer[]>();
+  for (const peer of peers) {
+    const list = groups.get(peer.category);
+    if (list === undefined) groups.set(peer.category, [peer]);
+    else list.push(peer);
+  }
+  const per_category = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([category, list]) => {
+    const catPreds: number[] = [];
+    const catActuals: number[] = [];
+    const catErrs: number[] = [];
+    let catHalf = 0;
+    for (const peer of list) {
+      const pred = heldOutMultiple(peers, category, peer.slug, model, blended);
+      catPreds.push(pred);
+      catActuals.push(peer.ratio);
+      catErrs.push(Math.abs(pred - peer.ratio) / peer.ratio);
+      if (pred / peer.ratio >= 0.5 && pred / peer.ratio <= 2) catHalf++;
+    }
+    return {
+      category,
+      peers: list.length,
+      median_ae: round4(median(catErrs)),
+      within_2x: list.length === 0 ? 0 : catHalf / list.length,
+      correlation: list.length < 3 ? 0 : round4(pearsonLog(catPreds, catActuals)),
+    };
+  });
+
+  return {
+    peers: n,
+    median_absolute_error: n === 0 ? 0 : round4(median(errs)),
+    within_half: n === 0 ? 0 : half / n,
+    within_third: n === 0 ? 0 : third / n,
+    correlation: n < 3 ? 0 : round4(pearsonLog(preds, actuals)),
+    per_category,
+  };
+}
+
+/** Pearson correlation of log(predicted) against log(actual); 0 when the data cannot carry one. */
+function pearsonLog(preds: number[], actuals: number[]): number {
+  if (preds.length !== actuals.length || preds.length < 3) return 0;
+  const xs = preds.map((p) => Math.log(p));
+  const ys = actuals.map((a) => Math.log(a));
+  const n = xs.length;
+  const mx = xs.reduce((s, v) => s + v, 0) / n;
+  const my = ys.reduce((s, v) => s + v, 0) / n;
+  let num = 0;
+  let dx2 = 0;
+  let dy2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i]! - mx;
+    const dy = ys[i]! - my;
+    num += dx * dy;
+    dx2 += dx * dx;
+    dy2 += dy * dy;
+  }
+  if (dx2 === 0 || dy2 === 0) return 0;
+  return num / Math.sqrt(dx2 * dy2);
+}
+
+/** Result of a temporal walk-forward: train on the older peers, score on the newer ones. */
+export interface WalkForwardResult {
+  /** The date the training window ends on: train is listed at or before it, test after. */
+  split_date: string;
+  older_train: number;
+  newer_test: number;
+  older_multiple: number;
+  newer_multiple: number;
+  /** The walk-forward MAE minus the LOO MAE, as a fraction of the LOO MAE: negative is better. */
+  mae_vs_loo: number;
+  median_absolute_error: number;
+  within_half: number;
+  within_third: number;
+  correlation: number;
+}
+
+/**
+ * The temporal split a live model faces: fit on what was listed by `split`, then price what listed
+ * after it. Peers with a listing date are sorted by it; the split puts the older 60% in train and
+ * the newer 40% in test (both halves at least 8 peers, else the snapshot cannot carry the test and
+ * the function returns null). The per-category multiples are refitted on the train half alone —
+ * including its own damping toward the train blend — and every test peer is priced the way the
+ * live model prices a row: its category's train multiple when the train half has a peer in that
+ * category, else the train blend.
+ */
+export function walkForward(peers: Peer[], model: ModelConstants, asOf: string): WalkForwardResult | null {
+  const dated = peers
+    .filter((p) => p.listed_at !== null && Date.parse(`${p.listed_at}T00:00:00Z`) < Date.parse(`${asOf}T00:00:00Z`))
+    .sort((a, b) => (a.listed_at! < b.listed_at! ? -1 : a.listed_at! > b.listed_at! ? 1 : a.slug < b.slug ? -1 : 1));
+  if (dated.length < 16) return null;
+  const trainSize = Math.max(8, Math.floor(dated.length * 0.6));
+  const testSize = dated.length - trainSize;
+  if (testSize < 8) return null;
+  const train = dated.slice(0, trainSize);
+  const test = dated.slice(trainSize);
+  const splitDate = test[0]!.listed_at!;
+
+  const trainBlended = groupMultiple(train);
+  const trainGroups = new Map<string, Peer[]>();
+  for (const peer of train) {
+    const list = trainGroups.get(peer.category);
+    if (list === undefined) trainGroups.set(peer.category, [peer]);
+    else list.push(peer);
+  }
+  const trainMultipleOf = (category: string): number => {
+    const list = trainGroups.get(category);
+    const raw = list === undefined ? trainBlended : groupMultiple(list);
+    return clamp(raw * (1 - model.damping) + trainBlended * model.damping, model.multiple_min, model.multiple_max);
+  };
+
+  const preds: number[] = [];
+  const actuals: number[] = [];
+  const errs: number[] = [];
+  let half = 0;
+  let third = 0;
+  for (const peer of test) {
+    const pred = trainMultipleOf(peer.category);
+    preds.push(pred);
+    actuals.push(peer.ratio);
+    errs.push(Math.abs(pred - peer.ratio) / peer.ratio);
+    if (pred / peer.ratio >= 0.5 && pred / peer.ratio <= 2) half++;
+    if (pred / peer.ratio >= 0.33 && pred / peer.ratio <= 3) third++;
+  }
+  const mae = median(errs);
+  const looMae = median(
+    peers.map((peer) => {
+      const pred = heldOutMultiple(peers, peer.category, peer.slug, model, groupMultiple(peers));
+      return Math.abs(pred - peer.ratio) / peer.ratio;
+    }),
+  );
+  if (!Number.isFinite(mae) || !Number.isFinite(looMae) || looMae <= 0) return null;
+
+  return {
+    split_date: splitDate,
+    older_train: train.length,
+    newer_test: test.length,
+    older_multiple: round4(trainBlended),
+    newer_multiple: round4(groupMultiple(test)),
+    mae_vs_loo: round4((mae - looMae) / looMae),
+    median_absolute_error: round4(mae),
+    within_half: test.length === 0 ? 0 : half / test.length,
+    within_third: test.length === 0 ? 0 : third / test.length,
+    correlation: test.length < 3 ? 0 : round4(pearsonLog(preds, actuals)),
+  };
+}
+
+/** Range honesty: how the final model's own predictions scatter around the peers' true multiples. */
+export interface RangeHonesty {
+  total_peers: number;
+  /** Share predicted within 0.5-2x of the true multiple: the tight band. */
+  within_half: number;
+  /** Share within 0.33-3x: the working band. */
+  within_third: number;
+  /** Share within 0.25-4x: the wide band. */
+  within_quarter: number;
+  /** Share outside even 0.25-4x: the rows a reader should distrust. */
+  outside_any: number;
+}
+
+/**
+ * Range honesty of the final fit (every peer in train): the share of token-bearing peers whose
+ * true mcap/TVL lands in each band around the model's predicted multiple. The board quotes these
+ * bands as its uncertainty: within 2x is what a comps estimate can promise, within 3x what it
+ * usually delivers, and the outside share names the rows to distrust.
+ */
+export function rangeHonesty(peers: Peer[], model: ModelConstants): RangeHonesty {
+  const blended = groupMultiple(peers);
+  const groups = new Map<string, Peer[]>();
+  for (const peer of peers) {
+    const list = groups.get(peer.category);
+    if (list === undefined) groups.set(peer.category, [peer]);
+    else list.push(peer);
+  }
+  const byCategory = new Map<string, number>();
+  for (const [category, list] of groups) {
+    const raw = groupMultiple(list);
+    byCategory.set(category, clamp(raw * (1 - model.damping) + blended * model.damping, model.multiple_min, model.multiple_max));
+  }
+  let half = 0;
+  let third = 0;
+  let quarter = 0;
+  let outside = 0;
+  for (const peer of peers) {
+    const pred = byCategory.get(peer.category) ?? clamp(blended, model.multiple_min, model.multiple_max);
+    const r = pred / peer.ratio;
+    if (r >= 0.5 && r <= 2) half++;
+    else if (r >= 0.33 && r <= 3) third++;
+    else if (r >= 0.25 && r <= 4) quarter++;
+    else outside++;
+  }
+  const n = peers.length || 1;
+  return {
+    total_peers: peers.length,
+    within_half: round4(half / n),
+    within_third: round4((half + third) / n),
+    within_quarter: round4((half + third + quarter) / n),
+    outside_any: round4(outside / n),
+  };
+}
+
+/** Complete model validation report. */
+export interface ValidationReport {
+  loo: LOOResult;
+  walk_forward: WalkForwardResult | null;
+  range_honesty: RangeHonesty;
+  blended_multiple: number;
+  peers_tested: number;
 }
 
 // ---------------------------------------------------------------- holdout verification
@@ -363,6 +621,7 @@ export interface RadarRow {
   watch: string;
   cost_tier: number;
   hold_days: number;
+  verdict: FarmVerdict;
 }
 
 /** A token-bearing protocol: it already trades, so its market cap is a fact, never a model. */
@@ -379,6 +638,40 @@ export interface LiveRow {
   age_days: number | null;
 }
 
+/** Complete model validation: LOO, walk-forward, range honesty — written to board.json and data.js. */
+export interface ValidationReport {
+  loo: {
+    peers: number;
+    median_absolute_error: number;
+    within_half: number;       // within 0.5–2x
+    within_third: number;      // within 0.33–3x
+    correlation: number;       // Pearson r on log scale
+    per_category: { category: string; peers: number; median_ae: number; within_2x: number; correlation: number }[];
+  };
+  walk_forward: {
+    split_date: string;
+    older_train: number;
+    newer_test: number;
+    older_multiple: number;
+    newer_multiple: number;
+    mae_vs_loo: number;
+    median_absolute_error: number;
+    within_half: number;
+    within_third: number;
+    correlation: number;
+  } | null;
+  range_honesty: {
+    total_peers: number;
+    within_half: number;    // 0.5–2x
+    within_third: number;   // 0.33–3x
+    within_quarter: number; // 0.25–4x
+    outside_any: number;    // < 0.25 or > 4
+  };
+  blended_multiple: number;
+  peers_tested: number;
+  model_version: string;
+}
+
 /** Everything the dashboard needs, plus the model's verification of itself. */
 export interface RadarData {
   as_of: string;
@@ -390,12 +683,28 @@ export interface RadarData {
   board_size: number;
   early_size: number;
   live_size: number;
+  /** Legacy fit — kept for backward compat, same data as validation.loo */
   fit: {
     blended: number;
     all_peers: number;
     all_median_abs_error: number;
     all_within_2x: number;
     categories: { category: string; peers: number; multiple: number; median_abs_error: number; within_2x: number; coverage_note: string }[];
+  };
+  /** Full model validation report */
+  validation: ValidationReport;
+  /** KPI strip totals */
+  kpis: {
+    implied_total_usd: number;
+    pre_token_rows: number;
+    token_trading_rows: number;
+    watchlist_covered: number;
+    median_category_multiple: number;
+    best_loo_mae: number;     // lowest per-category median AE (best category fit)
+    worst_loo_mae: number;    // highest per-category median AE (worst category fit)
+    snapshot_as_of: string;
+    floor_usd: number;
+    protocol_count: number;
   };
   rows: RadarRow[];
   live: LiveRow[];
@@ -487,10 +796,68 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const { blended, byCategory } = fitMultiples(peers, model);
   const fit = holdoutFit(peers, model);
 
+  // --- model validation ---
+  const loo = leaveOneOut(peers, model);
+  const wf = walkForward(peers, model, snapshot.as_of);
+  const rh = rangeHonesty(peers, model);
+
+  const validation: ValidationReport = {
+    loo: {
+      peers: loo.peers,
+      median_absolute_error: loo.median_absolute_error,
+      within_half: loo.within_half,
+      within_third: loo.within_third,
+      correlation: loo.correlation,
+      per_category: loo.per_category,
+    },
+    walk_forward: wf ? {
+      split_date: wf.split_date,
+      older_train: wf.older_train,
+      newer_test: wf.newer_test,
+      older_multiple: wf.older_multiple,
+      newer_multiple: wf.newer_multiple,
+      mae_vs_loo: wf.mae_vs_loo,
+      median_absolute_error: wf.median_absolute_error,
+      within_half: wf.within_half,
+      within_third: wf.within_third,
+      correlation: wf.correlation,
+    } : null,
+    range_honesty: rh,
+    blended_multiple: round4(blended),
+    peers_tested: peers.length,
+    model_version: MODEL_VERSION,
+  };
+
   const chosen = pickBoardProtocols(snapshot);
   const scored = chosen.map((p) => ({ p, s: scoreProtocol(p, snapshot.as_of, byCategory, blended, model) }));
   scored.sort((a, b) => b.s.implied - a.s.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   const watchlist = new Set(snapshot.watchlist);
+
+  // --- KPI strip ---
+  const impliedTotal = scored.reduce((s, { s: sc }) => s + sc.implied, 0);
+  const tokenTrading = snapshot.protocols.filter((p) => hasToken(p) && p.category !== 'CEX');
+  const allCategoryFit = [...byCategory.values()];
+  const medianCategoryMultiple = allCategoryFit.length > 0 ? round4(median(allCategoryFit.map((f) => f.multiple))) : blended;
+
+  // Best/worst LOO per-category MAE among categories with ≥3 peers
+  const catMae = loo.per_category.filter((c) => c.peers >= 3);
+  catMae.sort((a, b) => a.median_ae - b.median_ae);
+  const bestLoo = catMae.length > 0 ? catMae[0]!.median_ae : 0;
+  const worstLoo = catMae.length > 0 ? catMae[catMae.length - 1]!.median_ae : 0;
+
+  const kpis = {
+    implied_total_usd: impliedTotal,
+    pre_token_rows: scored.length,
+    token_trading_rows: tokenTrading.length,
+    watchlist_covered: snapshot.watchlist.length,
+    median_category_multiple: medianCategoryMultiple,
+    best_loo_mae: round4(bestLoo),
+    worst_loo_mae: round4(worstLoo),
+    snapshot_as_of: snapshot.as_of,
+    floor_usd: snapshot.floor_usd,
+    protocol_count: snapshot.protocols.length,
+  };
+
   const board: BoardRow[] = scored.map(({ p, s }, i) => ({
     rank: i + 1,
     slug: p.slug,
@@ -543,6 +910,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
         coverage_note: f.coverage_note,
       })),
     },
+    validation,
+    kpis,
     rows: board.map((r) => {
       const p: SnapshotProtocol = {
         slug: r.slug,
@@ -564,6 +933,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       const exposure = tier >= 2
         ? `A $${capital} position is moderate here: ${r.name}'s TVL is above $1B, so contract risk is smaller, but never more than you can lose.`
         : `Keep the position near $${capital}: ${r.name} is ${r.tvl_usd >= 100_000_000 ? 'a mid-size' : 'a small'} protocol with no token yet, so its contracts are less battle-tested.`;
+      const verdict = farmVerdict(p, hold, capital, gas, tier);
       return {
         rank: r.rank,
         slug: r.slug,
@@ -585,6 +955,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
         watch: watchFor(p),
         cost_tier: tier,
         hold_days: hold,
+        verdict,
       };
     }),
     live: [],

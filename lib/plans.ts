@@ -3,11 +3,24 @@
 // Every plan is derived from the protocol's own record — category, chains, TVL, age — never from a
 // hand-written list of names. A plan is five to eight steps, each with the action, what it costs in
 // dollars or gas, how long it takes, and what sign of a launch to watch for on the way.
+//
+// COSTED FARM VERDICTS:
+// Each plan carries a concrete cost breakdown: one-time gas ($), weekly gas ($/week),
+// capital ($), and total estimated cost over the hold period ($). Time is expressed in
+// weeks, and $/hr is computed as total_cost / total_hours for easy comparison.
+// Costs are derived from chain-specific gas prices, tier-based capital, and hold duration.
 
 import type { SnapshotProtocol } from './model.ts';
 
+/** A protocol tier: maps TVL range to capital position and cost estimates. */
+export interface CostTier {
+  capital: number;
+  tier: number;
+  band: string;
+}
+
 /** How much capital one farm position needs, from the protocol's own TVL. */
-export function capitalFor(tvlUsd: number): { capital: number; tier: number; band: string } {
+export function capitalFor(tvlUsd: number): CostTier {
   if (tvlUsd >= 5_000_000_000) return { capital: 500, tier: 3, band: 'blue-chip TVL' };
   if (tvlUsd >= 1_000_000_000) return { capital: 250, tier: 2, band: 'large TVL' };
   if (tvlUsd >= 100_000_000) return { capital: 100, tier: 1, band: 'established TVL' };
@@ -33,6 +46,57 @@ export function gasFor(p: SnapshotProtocol): number {
   if (chain === 'ethereum') return 6;
   if (chain === 'bitcoin' || chain === 'solana') return 1;
   return 2;
+}
+
+/**
+ * Estimated gas cost per week (one qualifying action per week: deposit/withdraw/swap/vote).
+ * Rounds up to the nearest dollar for readability.
+ */
+export function gasPerWeek(gas: number): number {
+  return Math.max(1, Math.ceil(gas / 3));
+}
+
+/**
+ * Costed farm verdict: all cost components, total, and $/hr.
+ * Derives from tier (capital), chain (gas), and hold period.
+ */
+export interface FarmVerdict {
+  capital: number;
+  one_time_gas: number;      // setup tx (~$gas)
+  weekly_gas: number;        // $ per week (weekly action)
+  total_weeks: number;       // hold period in weeks
+  total_gas: number;         // one_time_gas + weekly_gas × total_weeks
+  total_cost: number;        // capital + total_gas
+  cost_per_hour: number;    // total_cost / (total_weeks × 7 × 24)
+  tier: number;
+  tier_label: string;
+}
+
+/** Build a costed farm verdict from the protocol and hold days. */
+export function farmVerdict(p: SnapshotProtocol, holdDays: number, capital: number, gas: number, tier: number): FarmVerdict {
+  const oneTimeGas = Math.max(1, gas);
+  const weeklyGas = gasPerWeek(gas);
+  const totalWeeks = Math.max(1, Math.round(holdDays / 7));
+  const totalGas = oneTimeGas + weeklyGas * totalWeeks;
+  const totalCost = capital + totalGas;
+  const totalHours = totalWeeks * 7 * 24;
+  const costPerHour = totalHours > 0 ? round2(totalCost / totalHours) : 0;
+  const tierLabel = tier === 3 ? 'blue-chip' : tier === 2 ? 'large TVL' : tier === 1 ? 'established' : 'small';
+  return {
+    capital,
+    one_time_gas: oneTimeGas,
+    weekly_gas: weeklyGas,
+    total_weeks: totalWeeks,
+    total_gas: totalGas,
+    total_cost: totalCost,
+    cost_per_hour: costPerHour,
+    tier,
+    tier_label: tierLabel,
+  };
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 /** The category's core action, in the words a farmer can follow. */
