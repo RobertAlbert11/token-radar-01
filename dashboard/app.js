@@ -260,7 +260,7 @@ else if (key === 'tvl') { av = a.tvl_usd; bv = b.tvl_usd; }
 else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
 else if (key === 'age') { av = a.age_days === null ? -Infinity : a.age_days; bv = b.age_days === null ? -Infinity : b.age_days; }
 else if (key === 'net') { av = verdictOf(a).perHour; bv = verdictOf(b).perHour; }
-else { av = -a.rank; bv = -b.rank; }
+else { av = a.rank; bv = b.rank; }
 return av < bv ? -dir : av > bv ? dir : a.slug < b.slug ? -1 : 1;
 });
 }
@@ -387,6 +387,8 @@ kpi('Pre-token rows', String(k.pre_token_rows), 'no token yet'),
 kpi('Token comps set aside', String(k.token_trading_rows), 'anchor the fit'),
 kpi('Implied value, total', fmtUsd(k.implied_total_usd), 'board total', 'ok'),
 kpi('LOO within 2x', fmtPct0(v.loo.within_half), 'held-out peers ±2x'),
+kpi('LOO miss', fmtMult(D.evidence.rows[D.evidence.rows.length - 1].loo_miss), 'held-out peers, median'),
+kpi('WF miss', v.walk_forward ? fmtMult(D.evidence.rows[D.evidence.rows.length - 1].wf_miss) : 'n/a', 'walk-forward, median'),
 kpi('Brier vs base rate', D.odds.brier_loo.toFixed(3) + ' vs ' + D.odds.brier_base.toFixed(3), 'below baseline', D.odds.brier_loo < D.odds.brier_base ? 'ok' : ''));
 }
 function render() {
@@ -398,11 +400,11 @@ shell.appendChild(masthead());
 shell.appendChild(kpiStrip());
 shell.appendChild(integrityBar());
 shell.appendChild(controls(cats, chains));
-shell.appendChild(boardTable());
 var duo = el('div', { class: 'duo' });
 duo.appendChild(evidenceCard());
 duo.appendChild(oddsCard());
 shell.appendChild(duo);
+shell.appendChild(boardTable());
 var duo2 = el('div', { class: 'duo' });
 duo2.appendChild(modelCard());
 duo2.appendChild(accountingStrip());
