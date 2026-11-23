@@ -69,18 +69,18 @@ const first = (c: string, ...keys: string[]): boolean => keys.some((k) => c.incl
 /** The category's core action, in the words a farmer can follow. */
 export function actionFor(p: SnapshotProtocol, capital: number, chain: string): string {
   const c = (p.category ?? '').toLowerCase(), n = p.name, k = `$${capital}`;
-  if (first(c, 'lend', 'cdp', 'collateral')) return `Supply ${k} of USDC to ${n} on ${chain}, then borrow a little against it and repay part — both sides of the book see you.`;
-  if (first(c, 'dex', 'yield', 'leveraged farm')) return `Provide ${k} of liquidity (half ETH, half USDC) to ${n}'s main pool on ${chain} and leave it to accrue fees.`;
-  if (first(c, 'staking', 'restak')) return `Stake ${k} of the chain's native asset through ${n} and hold the liquid receipt token in the same wallet.`;
-  if (first(c, 'perpetual', 'derivative')) return `Deposit ${k} of USDC as margin on ${n}; open one small long and one small short so both sides pay you fees.`;
-  if (first(c, 'curator', 'allocator')) return `Deposit ${k} into a ${n} vault on ${chain} and hold the vault shares without withdrawing.`;
+  if (first(c, 'lend', 'cdp', 'collateral')) return `Supply ${k} of USDC to ${n} on ${chain}; borrow a little and repay part — both sides of the book see you.`;
+  if (first(c, 'dex', 'yield', 'leveraged farm')) return `Provide ${k} of liquidity (half ETH, half USDC) to ${n}'s pool on ${chain}; leave it to accrue fees.`;
+  if (first(c, 'staking', 'restak')) return `Stake ${k} of the chain's native asset via ${n}; hold the liquid receipt token in the same wallet.`;
+  if (first(c, 'perpetual', 'derivative')) return `Deposit ${k} of USDC as margin on ${n}; open one small long and one small short so both sides pay fees.`;
+  if (first(c, 'curator', 'allocator')) return `Deposit ${k} into a ${n} vault on ${chain}; hold the shares without withdrawing.`;
   if (first(c, 'stable')) return `Mint ${k} of the stable asset through ${n} on ${chain}, then deposit it back into its savings side.`;
   if (first(c, 'rwa')) return `Mint ${k} of ${n}'s tokenized asset on ${chain} and hold it across at least one monthly cycle.`;
   if (first(c, 'insurance')) return `Buy ${k} of cover from ${n} on ${chain} and keep the policy open for the full term.`;
   if (first(c, 'launchpad')) return `Deposit ${k} into ${n}'s active sale or pool on ${chain} and hold the allocation.`;
-  if (first(c, 'nft')) return `Make one purchase and one listing on ${n} with ${k} so both sides of the marketplace see the wallet.`;
+  if (first(c, 'nft')) return `One purchase and one listing on ${n} with ${k} so both sides see the wallet.`;
   if (first(c, 'options')) return `Buy one small call and one small put on ${n} with ${k} total, and let both expire.`;
-  if (first(c, 'payment')) return `Route ${k} of payments through ${n} in several transactions rather than one.`;
+  if (first(c, 'payment')) return `Route ${k} of payments through ${n} in several transactions, not one.`;
   if (first(c, 'governance', 'incentive')) return `Deposit ${k} into ${n}'s incentive program on ${chain} and vote with the position at least once.`;
   if (first(c, 'prediction')) return `Fund ${k} and take one position on each side of ${n}'s liveliest market.`;
   if (first(c, 'bridge')) return `Bridge ${k} of USDC to ${chain} through ${n}, use the app on the far side, and bridge a smaller amount back.`;
@@ -89,10 +89,10 @@ export function actionFor(p: SnapshotProtocol, capital: number, chain: string): 
 /** What sign of a launch to watch for, from the category and the wallet's view. */
 export function watchFor(p: SnapshotProtocol): string {
   const c = (p.category ?? '').toLowerCase(), n = p.name;
-  if (first(c, 'lend', 'cdp')) return `Watch ${n}'s docs and governance forum for a points program, a token vote, or a claim page on its own domain.`;
+  if (first(c, 'lend', 'cdp')) return `Watch ${n}'s docs and forum for a points program, a token vote, or a claim page on its own domain.`;
   if (first(c, 'dex', 'yield')) return `Watch for ${n} liquidity mining under its own ticker and its symbol appearing on CoinGecko.`;
   if (first(c, 'staking', 'restak')) return `Watch for ${n} to add governance; restaking tokens usually launch with points redeemable.`;
-  if (first(c, 'curator', 'allocator')) return `Watch ${n}'s X account and docs for vault-token announcements — curators often reward early depositors pro rata.`;
+  if (first(c, 'curator', 'allocator')) return `Watch ${n}'s X and docs for vault-token news — curators often reward early depositors pro rata.`;
   if (first(c, 'rwa')) return `Watch for licensing news first: RWA launches follow legal clarity, so a token sign comes late.`;
   if (first(c, 'perpetual', 'derivative')) return `Watch ${n}'s trading-rewards pages: perps publish fee tiers and points before a token.`;
   if (first(c, 'bridge')) return `Watch for an incentive season or points campaign — bridges usually launch a token after one.`;
@@ -111,13 +111,13 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
     ? `A $${capital} position is moderate here: ${p.name}'s TVL is above $1B, so contract risk is smaller — but never more than you can lose.`
     : `Keep the position near $${capital}: ${p.name} is ${p.tvl_usd >= 1e8 ? 'a mid-size' : 'a small'} protocol with no token yet, so its contracts are less battle-tested.`;
   return [
-    { text: 'Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: `under $${Math.max(1, gas)} of gas for the first transaction`, time: '5 minutes' },
+    { text: 'Use a fresh wallet holding only the farm funds; keep its seed phrase offline.', cost: `under $${Math.max(1, gas)} of gas for the first transaction`, time: '5 minutes' },
     { text: actionFor(p, capital, chain), cost: `$${capital} of capital and about $${gas} of gas on ${chain}`, time: '15 minutes to set up' },
-    { text: `Make one qualifying action each week for ${hold} days — a deposit, a withdraw, a swap or a vote — so the wallet is active in more than one monthly snapshot.`, cost: `about $${Math.max(1, Math.round(gas / 3))} of gas a week`, time: '10 minutes a week' },
-    { text: `Open the protocol's own points or rewards page (if it has one) and register the wallet there; never connect it to a look-alike domain.`, cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
+    { text: `One qualifying action each week for ${hold} days — deposit, withdraw, swap or vote — so the wallet is active in more than one monthly snapshot.`, cost: `about $${Math.max(1, Math.round(gas / 3))} of gas a week`, time: '10 minutes a week' },
+    { text: `Open the protocol's own points page (if any) and register the wallet there; never a look-alike domain.`, cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
     { text: exposure, cost: 'the capital stays in the position until the hold ends', time: `${hold} days` },
     { text: watchFor(p), cost: 'nothing but attention', time: '5 minutes a week' },
-    { text: 'Log the wallet address, every date and transaction hash, and the position size, so you can prove the farm or unwind it fast.', cost: 'nothing but the log', time: '5 minutes' },
+    { text: 'Log the wallet address, every date and tx hash, and the position size — proof of the farm, fast to unwind.', cost: 'nothing but the log', time: '5 minutes' },
   ];
 }
 /** A step as one string: its action, then its cost and time, within the gate's 20..600 characters. */

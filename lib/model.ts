@@ -23,7 +23,6 @@ export const MODEL_VERSION = 'yieldradar-3';
 
 export const EARLY_ROWS = 210;
 
-export const LIVE_ROWS = 20;
 
 export function hasToken(p: SnapshotProtocol): boolean {
   return p.mcap_usd !== null || p.gecko_id !== null || p.symbol !== null;
@@ -394,10 +393,6 @@ export interface RadarRow {
   patience_mult: number; on_watchlist: boolean; action: string; exposure: string; watch: string;
   cost_tier: number; hold_days: number; verdict: ReturnType<typeof farmVerdict>; comps: Comp[];
 }
-export interface LiveRow {
-  slug: string; name: string; category: string | null; chains: string[]; tvl_usd: number;
-  mcap_usd: number | null; change_7d: number | null; mcap_tvl: number | null; listed_at: string | null; age_days: number | null;
-}
 export interface RadarData {
   as_of: string; source: string; floor_usd: number; model: ModelConstants; model_version: string;
   watchlist_size: number; board_size: number; early_size: number; live_size: number;
@@ -417,7 +412,6 @@ export interface RadarData {
     floor_usd: number; protocol_count: number;
   };
   rows: RadarRow[];
-  live: LiveRow[];
 }
 
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
@@ -453,19 +447,6 @@ export function launchSignals(p: SnapshotProtocol, age: number | null): string[]
   if (p.tvl_usd >= 1e9) out.push(`Scale: above $1B TVL with no token — among the largest unlaunched in its category.`);
   out.push(`Baseline: watch ${p.name}'s docs, forum and X for a points program, a claim page on its own domain, or a CoinGecko ticker.`);
   return out;
-}
-
-export function liveRows(snapshot: Snapshot, asOf: string): LiveRow[] {
-  return snapshot.protocols
-    .filter((p) => hasToken(p) && p.category !== 'CEX')
-    .sort((a, b) => (b.mcap_usd ?? 0) - (a.mcap_usd ?? 0) || b.tvl_usd - a.tvl_usd)
-    .slice(0, LIVE_ROWS)
-    .map((p) => ({
-      slug: p.slug, name: p.name, category: p.category, chains: p.chains,
-      tvl_usd: p.tvl_usd, mcap_usd: p.mcap_usd, change_7d: p.change_7d,
-      mcap_tvl: p.mcap_usd !== null && p.tvl_usd > 0 ? round4(p.mcap_usd / p.tvl_usd) : null,
-      listed_at: p.listed_at, age_days: ageDays(asOf, p.listed_at),
-    }));
 }
 
 export function checksumOf(board: BoardRow[]): string {
@@ -537,23 +518,17 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       ? `A $${capital} position is moderate here: TVL above $1B means smaller contract risk — but never more than you can lose.`
       : `Keep the position near $${capital}: ${r.name} is ${r.tvl_usd >= 1e8 ? 'a mid-size' : 'a small'} protocol with no token yet, so its contracts are less battle-tested.`;
     return {
-      rank: r.rank, slug: r.slug, name: r.name, category: r.category, chains: r.chains,
-      tvl_usd: r.tvl_usd, change_7d: r.change_7d, listed_at: r.listed_at, age_days: r.age_days,
-      implied_value_usd: r.implied_value_usd, multiple: r.model.multiple,
-      multiple_source: r.model.multiple_source, trend_mult: r.model.trend_mult,
-      patience_mult: r.model.patience_mult, on_watchlist: r.on_watchlist,
-      action: actionFor(p, capital, chainOf(p)), exposure, watch: watchFor(p),
-      cost_tier: tier, hold_days: hold, verdict, comps: compsOf(p, r.tvl_usd),
+      ...r,
+            cost_tier: tier, hold_days: hold, verdict, comps: compsOf(p, r.tvl_usd),
     };
   });
 
-  const live = liveRows(snapshot, snapshot.as_of);
   const catFit = [...byCategory.values()];
   const radar: RadarData = {
     as_of: snapshot.as_of, source: snapshot.source, floor_usd: snapshot.floor_usd,
     model, model_version: MODEL_VERSION, checksum: checksumOf(board),
     watchlist_size: snapshot.watchlist.length, board_size: board.length,
-    early_size: board.filter((r) => !watchlist.has(r.slug)).length, live_size: live.length,
+    early_size: board.filter((r) => !watchlist.has(r.slug)).length, live_size: 0,
     validation: {
       loo: leaveOneOut(peers, model), walk_forward: walkForward(peers, model, snapshot.as_of),
       range_honesty: rangeHonesty(peers, model),
@@ -570,7 +545,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       median_category_multiple: catFit.length ? round4(median(catFit.map((f) => f.multiple))) : round4(blended),
       snapshot_as_of: snapshot.as_of, floor_usd: snapshot.floor_usd, protocol_count: snapshot.protocols.length,
     },
-    rows, live,
+    rows,
   };
   return { board, radar };
 }
