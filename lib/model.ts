@@ -285,14 +285,10 @@ age_days: number | null; implied_value_usd: number;
 model: { multiple: number; multiple_source: string; trend_pct: number; trend_mult: number; patience_mult: number; age_days: number | null };
 farm_steps: string[];
 }
-export interface RadarRow {
-rank: number; slug: string; name: string; category: string | null; chains: string[];
-tvl_usd: number; change_7d: number | null; listed_at: string | null; age_days: number | null;
-implied_value_usd: number; multiple: number; multiple_source: string; trend_mult: number;
-patience_mult: number; on_watchlist: boolean; action: string; exposure: string; watch: string;
-cost_tier: number; hold_days: number; verdict: ReturnType<typeof farmVerdict>;
+export interface RadarRow extends Omit<BoardRow, 'model' | 'gecko_id' | 'symbol' | 'token_status' | 'mcap_usd'> {
+action: string; exposure: string; watch: string; cost_tier: number; hold_days: number;
+verdict: ReturnType<typeof farmVerdict>;
 comps: { name: string; tvl_usd: number; mcap_usd: number; ratio: number; blind_multiple: number; miss: number }[];
-farm_steps: string[];
 }
 export interface RadarData {
 as_of: string; source: string; floor_usd: number; model: typeof MODEL; model_version: string;
