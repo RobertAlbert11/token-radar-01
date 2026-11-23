@@ -57,8 +57,12 @@ export function gasPerWeek(gas: number): number {
 }
 
 /**
- * Costed farm verdict: all cost components, total, and $/hr.
- * Derives from tier (capital), chain (gas), and hold period.
+ * Costed farm verdict: all cost components, the expected reward, and one net number.
+ * Costs: one-time gas (setup tx), weekly gas (one qualifying action a week), a round-trip swap fee
+ * on the capital, and the capital charge — what the same dollars would earn in T-bills over the
+ * hold. Reward: the protocol's implied launch value x its token odds x AIRDROP_SHARE, spread over
+ * the farmers (assumed FARMER_TVL_SHARE of TVL) — an expectation from the snapshot's own figures,
+ * never a promise. NET $/hour nets reward minus every cost over the hold's hours.
  */
 export interface FarmVerdict {
   capital: number;
@@ -66,10 +70,30 @@ export interface FarmVerdict {
   weekly_gas: number;        // $ per week (weekly action)
   total_weeks: number;       // hold period in weeks
   total_gas: number;         // one_time_gas + weekly_gas × total_weeks
-  total_cost: number;        // capital + total_gas
-  cost_per_hour: number;    // total_cost / (total_weeks × 7 × 24)
+  swap_fee: number;          // round-trip swap fee on the capital
+  capital_charge: number;    // T-bill the capital would have earned over the hold
+  total_cost: number;        // every cost summed: gas + swap fee + capital charge
+  expected_reward: number;   // implied value x odds x airdrop share, per farmer
+  net_usd: number;           // expected_reward - total_cost
+  net_per_hour: number;      // net_usd / (total_weeks × 7 × 24)
+  verdict: 'FARM' | 'MARGINAL' | 'SKIP';
   tier: number;
   tier_label: string;
+}
+/** Share of a launch's implied value assumed to reach farmers (printed on the page). */
+export const AIRDROP_SHARE = 0.05;
+/** Share of TVL assumed to be farming wallets competing for that share (printed on the page). */
+export const FARMER_TVL_SHARE = 0.0002;
+/** The risk-free rate the capital forgoes over the hold (printed on the page). */
+export const T_BILL_RATE = 0.0433;
+/** The round-trip swap fee on the capital (printed on the page). */
+export const SWAP_FEE_RATE = 0.006;
+/** The headline rule: FARM clears this; under it, positive is MARGINAL, zero-or-less SKIP. */
+export const FARM_HOURLY = 10;
+/** Expected per-farmer reward: implied x odds x airdrop share, per dollar of competing farmers' TVL. */
+export function expectedReward(implied: number, odds: number, capital: number, tvlUsd: number): number {
+  const farmersTvl = Math.max(tvlUsd, 1) * FARMER_TVL_SHARE;
+  return implied * odds * AIRDROP_SHARE * (capital / farmersTvl);
 }
 
 /**
@@ -78,23 +102,32 @@ export interface FarmVerdict {
  * a reader should expect — capital plus gas — and the $/hour that total works out to, so two farms
  * on different chains and windows can be compared on one number.
  */
-export function farmVerdict(p: SnapshotProtocol, holdDays: number, capital: number, gas: number, tier: number): FarmVerdict {
+export function farmVerdict(p: SnapshotProtocol, holdDays: number, capital: number, gas: number, tier: number, implied: number, odds: number): FarmVerdict {
   const oneTimeGas = Math.max(1, gas);
   const weeklyGas = gasPerWeek(gas);
   const totalWeeks = Math.max(1, Math.round(holdDays / 7));
-  const totalGas = oneTimeGas + weeklyGas * totalWeeks;
-  const totalCost = capital + totalGas;
   const totalHours = totalWeeks * 7 * 24;
-  const costPerHour = totalHours > 0 ? round2(totalCost / totalHours) : 0;
+  const totalGas = oneTimeGas + weeklyGas * totalWeeks;
+  const swapFee = Math.round(capital * SWAP_FEE_RATE * 100) / 100;
+  const capitalCharge = Math.round(capital * T_BILL_RATE * (totalWeeks / 52) * 100) / 100;
+  const totalCost = Math.round(totalGas + swapFee + capitalCharge);
+  const reward = Math.round(expectedReward(implied, odds, capital, p.tvl_usd));
+  const net = reward - totalCost;
+  const netPerHour = round2(net / totalHours);
   const tierLabel = tier === 3 ? 'blue-chip' : tier === 2 ? 'large TVL' : tier === 1 ? 'established' : 'small';
   return {
     capital,
     one_time_gas: oneTimeGas,
     weekly_gas: weeklyGas,
     total_weeks: totalWeeks,
-    total_gas: totalGas,
+    total_gas: Math.round(totalGas),
+    swap_fee: swapFee,
+    capital_charge: capitalCharge,
     total_cost: totalCost,
-    cost_per_hour: costPerHour,
+    expected_reward: reward,
+    net_usd: net,
+    net_per_hour: netPerHour,
+    verdict: netPerHour >= FARM_HOURLY ? 'FARM' : netPerHour > 0 ? 'MARGINAL' : 'SKIP',
     tier,
     tier_label: tierLabel,
   };
