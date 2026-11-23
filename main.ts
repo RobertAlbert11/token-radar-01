@@ -88,9 +88,13 @@ const fitLine = radar.fit.categories
   .slice(0, 4)
   .map((f) => `${f.category} ${f.multiple}x (MAE ${Math.round(f.median_abs_error * 100)}%)`)
   .join(', ');
+const wf = radar.validation.walk_forward;
 process.stdout.write(
   `yieldradar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} watchlisted, ${board.length} rows scored (${radar.early_size} early below the floor)\n` +
     `yieldradar: fit — blended ${radar.fit.blended}x over ${radar.fit.all_peers} peers, ${Math.round(radar.fit.all_within_2x * 100)}% within 2x (MAE ${Math.round(radar.fit.all_median_abs_error * 100)}%); ${fitLine}\n` +
+    `yieldradar: validation — LOO MAE ${Math.round(radar.validation.loo.median_absolute_error * 100)}%, ${Math.round(radar.validation.loo.within_half * 100)}% within 2x, r=${radar.validation.loo.correlation.toFixed(2)}; ` +
+    (wf ? `walk-forward ${wf.older_train}→${wf.newer_test} (split ${wf.split_date}) MAE ${Math.round(wf.median_absolute_error * 100)}% (${wf.mae_vs_loo <= 0 ? '' : '+'}${Math.round(wf.mae_vs_loo * 100)}% vs LOO); ` : 'walk-forward n/a; ') +
+    `bands ${Math.round(radar.validation.range_honesty.within_half * 100)}/${Math.round(radar.validation.range_honesty.within_third * 100)}/${Math.round(radar.validation.range_honesty.within_quarter * 100)}% within 2x/3x/4x\n` +
     `yieldradar: top row ${board[0]!.name} at $${board[0]!.implied_value_usd.toLocaleString('en-US')} implied\n` +
     `yieldradar: wrote board.json, data.js, dashboard/ (3 files), screenshots/ (${shots.length}) and dossier.json under ${out}\n`,
 );

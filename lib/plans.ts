@@ -72,7 +72,12 @@ export interface FarmVerdict {
   tier_label: string;
 }
 
-/** Build a costed farm verdict from the protocol and hold days. */
+/**
+ * Build a costed farm verdict from the protocol's own record: capital from the TVL tier, gas from
+ * its main chain, one qualifying action a week over the hold window. The verdict is the honest all-in
+ * a reader should expect — capital plus gas — and the $/hour that total works out to, so two farms
+ * on different chains and windows can be compared on one number.
+ */
 export function farmVerdict(p: SnapshotProtocol, holdDays: number, capital: number, gas: number, tier: number): FarmVerdict {
   const oneTimeGas = Math.max(1, gas);
   const weeklyGas = gasPerWeek(gas);

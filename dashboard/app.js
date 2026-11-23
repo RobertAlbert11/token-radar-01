@@ -121,6 +121,7 @@
     if (params.get('sort')) state.sort = params.get('sort');
     if (params.get('dir')) state.dir = Number(params.get('dir')) || 1;
     if (params.get('p')) state.selected = params.get('p');
+    state.scrollAfterRender = params.get('scroll');
   }
   function writeHash() {
     var params = new URLSearchParams();
@@ -194,7 +195,7 @@
       );
     }
     return el('section', { class: 'kpi-strip', 'aria-label': 'Key figures' },
-      kpi('Watchlist covered', k.watchlist_covered + ' / ' + k.watchlist_covered, 'accent', 'every slug scored'),
+      kpi('Watchlist covered', k.watchlist_covered + ' / ' + k.watchlist_covered, 'accent', 'floor, never the ceiling'),
       kpi('Pre-token rows', String(k.pre_token_rows), null, 'ranked, no token yet'),
       kpi('Token-trading rows', String(k.token_trading_rows), null, 'comps, set aside'),
       kpi('Implied value, total', fmtUsd(k.implied_total_usd), 'accent', 'sum over the board'),
@@ -545,7 +546,7 @@
       el('div', { class: 'verdict' },
         el('div', { class: 'v' }, el('span', { class: 'v-label', text: 'Est. cost' }), el('b', { class: 'v-value', text: '~' + fmtUsd(verdict.total_cost) }), el('span', { class: 'v-sub', text: '$' + verdict.capital + ' capital + $' + verdict.total_gas + ' gas' })),
         el('div', { class: 'v' }, el('span', { class: 'v-label', text: 'Time' }), el('b', { class: 'v-value plain', text: verdict.hold_weeks + ' week' + (verdict.hold_weeks === 1 ? '' : 's') }), el('span', { class: 'v-sub', text: 'hold ' + row.hold_days + ' days' })),
-        el('div', { class: 'v' }, el('span', { class: 'v-label', text: 'Avg $/hr' }), el('b', { class: 'v-value', text: fmtHours(verdict.per_hour) }), el('span', { class: 'v-sub', text: 'cost ÷ hours in the farm' })),
+        el('div', { class: 'v' }, el('span', { class: 'v-label', text: 'Avg $/hr' }), el('b', { class: 'v-value', text: fmtHours(verdict.per_hour) }), el('span', { class: 'v-sub', text: '$' + verdict.total_cost + ' ÷ ' + (verdict.hold_weeks * 168).toLocaleString('en-US') + 'h' })),
         el('div', { class: 'v' }, el('span', { class: 'v-label', text: 'Position tier' }), el('b', { class: 'v-value plain', text: '$' + verdict.capital }), el('span', { class: 'v-sub', text: costTierLabel(row.cost_tier) }))
       )
     ));
@@ -575,13 +576,13 @@
     duo.appendChild(el('div', null,
       el('div', { class: 'val-section-title', text: 'How validation backs this number' }),
       el('div', { class: 'kv' },
-        el('div', null, el('span', { text: 'Multiple source' }), el('b', { text: (row.category || 'Uncategorized') })),
+        el('div', null, el('span', { text: 'Multiple source' }), el('b', { text: (row.category || 'Uncategorized') + ' @ ' + fmtMult(row.multiple) })),
         el('div', null, el('span', { text: 'Category LOO MAE' }), el('b', { text: categoryMaeOf(row) })),
         el('div', null, el('span', { text: 'Category LOO within 2x' }), el('b', { text: categoryWithinOf(row) })),
         el('div', null, el('span', { text: 'Board-wide within 2x' }), el('b', { class: 'accent', text: fmtPct0(DATA.validation.loo.within_half) })),
         el('div', null, el('span', { text: 'Board-wide r (log)' }), el('b', { text: 'r=' + fmtCorr(DATA.validation.loo.correlation) }))
       ),
-      el('p', { class: 'footnote', text: 'This row\'s multiple was fitted without its own category peers (held out), then applied — the same leave-one-out the validation panel reports.' })
+      el('p', { class: 'footnote', text: 'The leave-one-out refits this category\'s multiple without each peer in turn and prices it against its true mcap/TVL — the honest error a comps estimate carries here.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' }, duo));
 
@@ -609,9 +610,10 @@
     if (!v) return 'n/a';
     var cat = row.category || 'Uncategorized';
     for (var i = 0; i < v.loo.per_category.length; i++) {
-      if (v.loo.per_category[i].category === cat) return fmtPct0(v.loo.per_category[i].median_ae) + ' (' + v.loo.per_category[i].peers + ' peers)';
+      var c = v.loo.per_category[i];
+      if (c.category === cat) return fmtPct0(c.median_ae) + ' (' + c.peers + ' peer' + (c.peers === 1 ? '' : 's') + ')';
     }
-    return 'blended multiple (' + fmtPct0(v.loo.median_absolute_error) + ' board-wide)';
+    return 'no peer in-category: ' + fmtPct0(v.loo.median_absolute_error) + ' board-wide';
   }
 
   function categoryWithinOf(row) {
@@ -694,6 +696,13 @@
     shell.appendChild(el('div', { class: 'duo' }, modelCard(), validationCard()));
     app.appendChild(shell);
     app.setAttribute('aria-busy', 'false');
+    // #scroll=<name> scrolls a section (e.g. the validation card) into view after render —
+    // how a screenshot frames a panel without touching the page's own logic.
+    if (state.scrollAfterRender) {
+      var target = document.querySelector('.' + state.scrollAfterRender) || document.getElementById(state.scrollAfterRender);
+      if (target && target.scrollIntoView) target.scrollIntoView({ block: 'start' });
+      state.scrollAfterRender = null;
+    }
     if (state.selected) openDetail(state.selected);
   }
 

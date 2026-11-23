@@ -934,6 +934,10 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
         ? `A $${capital} position is moderate here: ${r.name}'s TVL is above $1B, so contract risk is smaller, but never more than you can lose.`
         : `Keep the position near $${capital}: ${r.name} is ${r.tvl_usd >= 100_000_000 ? 'a mid-size' : 'a small'} protocol with no token yet, so its contracts are less battle-tested.`;
       const verdict = farmVerdict(p, hold, capital, gas, tier);
+  // board.json canonical numbers: keep every verdict field an integer where the gate reads one
+  verdict.total_cost = Math.round(verdict.total_cost);
+  verdict.total_gas = Math.round(verdict.total_gas);
+  verdict.capital = Math.round(verdict.capital);
       return {
         rank: r.rank,
         slug: r.slug,
