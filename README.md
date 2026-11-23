@@ -1,3 +1,9 @@
+# token-radar-01
+
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/RobertAlbert11/token-radar-01/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/RobertAlbert11/token-radar-01/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+
 # YieldRadar
 
 A token launch radar for the [make.fun token-radar-01 bounty](https://make.fun/bounty/token-radar-01): it reads one sealed snapshot of the protocol universe, works out which protocols still record no token (and are not a wrapped, staked or bridged product of one that trades), ranks them by what a token launch would be worth, and builds a web dashboard showing the ranked board, a detail view per protocol, and the steps to farm each one.
