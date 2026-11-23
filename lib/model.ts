@@ -280,11 +280,10 @@ export function holdoutFit(peers: Peer[], model: ModelConstants): { categories: 
       const trainMult = train.length === 0
         ? blended
         : clamp(groupMultiple(train) * (1 - model.damping) + blended * model.damping, model.multiple_min, model.multiple_max);
-      const truthMcap = list[i]!.ratio * (list[i]!.ratio === 0 ? 1 : 1); // truth mcap per $TVL is the ratio itself
-      const predicted = trainMult; // the model predicts a multiple, the truth is a multiple
-      const err = truthMcap === 0 ? 0 : Math.abs(predicted - truthMcap) / truthMcap;
+      const truth = list[i]!.ratio; // the model predicts a multiple; the peer's mcap/TVL is the truth
+      const err = Math.abs(trainMult - truth) / truth;
       errors.push(err);
-      if (truthMcap > 0 && predicted / truthMcap >= 0.5 && predicted / truthMcap <= 2) within++;
+      if (trainMult / truth >= 0.5 && trainMult / truth <= 2) within++;
     }
     const fitted = clamp(groupMultiple(list) * (1 - model.damping) + blended * model.damping, model.multiple_min, model.multiple_max);
     categories.push({
