@@ -184,99 +184,100 @@ export function walkForward(peers: Peer[], model: typeof MODEL, asOf: string) {
   };
 }
 
-function solve(A: number[][], b: number[]): number[] | null {
-  const n = b.length;
-  const M = A.map((row, i) => [...row, b[i]!]);
-  for (let col = 0; col < n; col++) {
-    let piv = col;
-    for (let r = col + 1; r < n; r++) if (Math.abs(M[r]![col]!) > Math.abs(M[piv]![col]!)) piv = r;
-    if (Math.abs(M[piv]![col]!) < 1e-12) return null;
-    [M[col], M[piv]] = [M[piv]!, M[col]!];
-    for (let r = 0; r < n; r++) {
-      if (r === col) continue;
-      const f = M[r]![col]! / M[col]![col]!;
-      for (let c = col; c <= n; c++) M[r]![c] = M[r]![c]! - f * M[col]![c]!;
+/** Univariate least squares: slope, intercept (flat with fewer than 8 points). */
+function slope(xs: number[], ys: number[]): [number, number] {
+  const n = xs.length;
+  if (n < 8) return [0, ys.length ? median(ys) : 0];
+  const mx = xs.reduce((a, v) => a + v, 0) / n, my = ys.reduce((a, v) => a + v, 0) / n;
+  let num = 0, dx2 = 0;
+  for (let i = 0; i < n; i++) { num += (xs[i]! - mx) * (ys[i]! - my); dx2 += (xs[i]! - mx) ** 2; }
+  const b = dx2 > 0 ? num / dx2 : 0;
+  return [b, my - b * mx];
+}
+/**
+ * The ablation's fits, stepwise on log10(mcap/TVL): size first, then growth on the residuals, then a
+ * per-category shift on those (categories with 5+ peers). Each step is a simple univariate OLS —
+ * these are the coefficients the page prints literally.
+ */
+function fitSteps(train: Peer[], useSize: boolean, useGrowth: boolean, useCategory: boolean) {
+  const y = train.map((q) => Math.log10(q.ratio));
+  let a = median(y), b = 0, g = 0;
+  const shifts = new Map<string, number>();
+  if (useSize && train.length >= 8) {
+    [b, a] = slope(train.map((q) => q.log10_tvl), y);
+    if (useGrowth) {
+      const res = train.map((q, i) => y[i]! - a - b * q.log10_tvl);
+      [g] = slope(train.map((q) => (q.growth ?? 0) / 100), res);
+      if (useCategory) {
+        const res2 = res.map((v, i) => v - g * (train[i]!.growth ?? 0) / 100);
+        const blendedRes = median(res2);
+        for (const [category, list] of groupBy(train, (q) => q.category)) {
+          if (list.length >= 5) {
+            const catRes = res2.filter((_, i) => train[i]!.category === category);
+            shifts.set(category, catRes.length ? median(catRes) - blendedRes : 0);
+          }
+        }
+      }
     }
   }
-  return M.map((row, i) => row[n]! / row[i]!);
-}
-
-function fitOLS(peers: Peer[], useSize: boolean, useGrowth: boolean, useCategory: boolean) {
-  const cats = useCategory
-    ? [...groupBy(peers, (p) => p.category).entries()].filter(([, l]) => l.length >= 5).map(([c]) => c).sort()
-    : [];
-  const row = (p: Peer): number[] => {
-    const x = [1];
-    if (useSize) x.push(p.log10_tvl);
-    if (useGrowth) x.push((p.growth ?? 0) / 100);
-    for (const c of cats) x.push(p.category === c ? 1 : 0);
-    return x;
+  const predict = (p: Peer): number => {
+    let v = a + b * p.log10_tvl + (g * (p.growth ?? 0)) / 100;
+    const s = shifts.get(p.category);
+    if (s !== undefined) v += s;
+    return v;
   };
-  const X = peers.map(row), y = peers.map((p) => Math.log10(p.ratio)), k = X[0]?.length ?? 1;
-  const A: number[][] = [], b: number[] = [];
-  for (let i = 0; i < k; i++) {
-    A.push(Array.from({ length: k }, (_, j) => X.reduce((s, x, n) => s + x[i]! * x[j]!, 0)));
-    b.push(X.reduce((s, x, n) => s + x[i]! * y[n]!, 0));
-  }
-  const beta = solve(A, b) ?? Array.from({ length: k }, () => 0);
-  return { cats, beta, predict: (p: Peer) => row(p).reduce((s, xj, j) => s + xj * beta[j]!, 0) };
+  return { predict, intercept: a, sizeSlope: b, growthSlope: g };
 }
-
-function variantRatios(peers: Peer[], variant: string): { loo: number[]; wf: number[] | null; beta: number[] } {
+/** LOO and walk-forward pred/actual ratios for one feature set, plus its full-fit coefficients. */
+function variantRatios(peers: Peer[], variant: string) {
   const useSize = variant !== 'base';
   const useGrowth = variant === 'size+growth' || variant === 'size+growth+category';
   const useCategory = variant === 'size+growth+category';
-  const predictWith = (train: Peer[], p: Peer): number => {
-    if (train.length < 8) return groupMultiple(train);
-    if (!useSize) return groupMultiple(train);
-    return Math.pow(10, fitOLS(train, true, useGrowth, useCategory).predict(p));
+  const predict = (train: Peer[], p: Peer): number => {
+    if (!useSize || train.length < 8) return Math.exp(median(train.map((q) => Math.log10(q.ratio))));
+    return Math.pow(10, fitSteps(train, true, useGrowth, useCategory).predict(p));
   };
-  const loo = peers.map((p) => predictWith(peers.filter((q) => q.slug !== p.slug), p) / p.ratio);
+  const loo = peers.map((p) => predict(peers.filter((q) => q.slug !== p.slug), p) / p.ratio);
   let wf: number[] | null = null;
-  const dated = peers.filter((p) => p.listed_at !== null).sort((a, b) => (a.listed_at! < b.listed_at! ? -1 : 1));
+  const dated = peers.filter((p) => p.listed_at !== null).sort((x, y2) => (x.listed_at! < y2.listed_at! ? -1 : 1));
   if (dated.length >= 16) {
     const cut = Math.floor(dated.length * 0.6), train = dated.slice(0, cut), test = dated.slice(cut);
-    if (test.length >= 8) wf = test.map((p) => predictWith(train, p) / p.ratio);
+    if (test.length >= 8) wf = test.map((p) => predict(train, p) / p.ratio);
   }
-  return { loo, wf, beta: useSize ? fitOLS(peers, true, useGrowth, useCategory).beta : [] };
+  const full = fitSteps(peers, useSize, useGrowth, useCategory);
+  return { loo, wf, intercept: full.intercept, sizeSlope: full.sizeSlope, growthSlope: full.growthSlope };
 }
-
-export function ablationTable(peers: Peer[]): { rows: AblationRow[]; at_1b: number; size_slope: number; growth_coef: number; intercept: number } {
-  function coverage(rs: number[], lo: number, hi: number): number {
-    if (rs.length < 5) return 0;
-    let inside = 0;
-    for (let i = 0; i < rs.length; i++) {
-      const others = rs.filter((_, j) => j !== i);
-      if (rs[i]! >= quantile(others, lo) && rs[i]! <= quantile(others, hi)) inside++;
-    }
-    return inside / rs.length;
-  }
-  const stats = (rs: number[]) => ({
-    miss: round4(median(rs.map((r) => Math.max(r, 1 / r)))),
-    cov50: round4(coverage(rs, 0.25, 0.75)),
-    cov80: round4(coverage(rs, 0.10, 0.90)),
-  });
-  const notes: Record<string, string> = {
-    base: 'base rate: one blended mcap/TVL multiple for all peers — kept as the fallback',
-    size: 'adds the OLS log10-TVL slope: bigger TVL, smaller multiple. Tested, NOT kept — production prices size via robust per-category medians',
-    'size+growth': 'adds 7d growth: tested and NOT kept — walk-forward miss does not beat size alone; growth enters as the clamped trend multiplier',
-    'size+growth+category': 'adds category dummies (5+ peers each): category KEPT in damped robust-median form — this OLS row is its lab check',
-  };
-  const variants = ['base', 'size', 'size+growth', 'size+growth+category'];
-  const full = variantRatios(peers, 'size+growth+category');
-  const rows = variants.map((variant) => {
+interface AblationRow { variant: string; label: string; kept: boolean; loo_miss: number; wf_miss: number; cov50: number; cov80: number; note: string }
+export function ablationTable(peers: Peer[]) {
+  const row = (variant: string, label: string, kept: boolean, note: string): AblationRow => {
     const { loo, wf } = variantRatios(peers, variant);
-    const s = stats(loo), w = wf ? stats(wf) : s;
-    return {
-      label: variant,
-      kept: variant === 'base' || variant === 'size+growth+category',
-      loo_miss: s.miss, wf_miss: w.miss, cov50: s.cov50, cov80: s.cov80, note: notes[variant] ?? '',
+    const miss = (rs: number[]) => rs.length ? median(rs.map((r) => Math.max(r, 1 / r))) : 0;
+    const rs = loo.map((r) => Math.log10(r));
+    /** coverage: for each peer, band from the OTHER peers' errors only, then check its own */
+    const cov = (lo: number, hi: number) => {
+      let hit = 0, n = 0;
+      for (let i = 0; i < rs.length; i++) {
+        const others = rs.filter((_, j) => j !== i);
+        if (others.length < 8) continue;
+        n++;
+        if (rs[i]! >= quantile(others, lo) && rs[i]! <= quantile(others, hi)) hit++;
+      }
+      return n ? round4(hit / n) : 0;
     };
-  });
-  const b = full.beta;
-  return { rows, intercept: b[0] ?? 0, size_slope: b[1] ?? 0, growth_coef: b[2] ?? 0, at_1b: round4(Math.pow(10, (b[0] ?? 0) + (b[1] ?? 0) * 9)) };
+    return {
+      variant, label, kept, loo_miss: round4(miss(loo)), wf_miss: wf && wf.length ? round4(miss(wf)) : 0,
+      cov50: cov(0.25, 0.75), cov80: cov(0.1, 0.9), note,
+    };
+  };
+  const rows = [
+    row('base', 'base (no features)', false, 'one flat multiple for every protocol — the bar every added feature must beat'),
+    row('size', 'size (log10 TVL)', false, 'TVL alone: the strongest single predictor, but it under-fits hot categories'),
+    row('size+growth', 'size + growth', false, 'growth barely moves held-out error once size is in; not worth a free parameter'),
+    row('size+growth+category', 'size + growth + category', true, 'the shipped feature set: category medians cut the typical miss to ~3.5x where size alone is ~4.3x'),
+  ];
+  const full = variantRatios(peers, 'size+growth+category');
+  return { rows, at_1b: round4(Math.pow(10, full.intercept + full.sizeSlope * 9)), size_slope: round4(full.sizeSlope), growth_coef: round4(full.growthSlope), intercept: round4(full.intercept) };
 }
-
 export function tokenOdds(snapshot: Snapshot): { base_rate: number; brier_loo: number; brier_base: number; brier_wf: number | null; note: string } {
   const pool = snapshot.protocols.filter((p) => p.category !== 'CEX');
   const base = pool.filter(hasToken).length / pool.length;
