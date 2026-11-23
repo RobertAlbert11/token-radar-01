@@ -124,7 +124,7 @@ var notes = el('ul', { class: 'notes' }, e.rows.map((r) => { return el('li', { t
 var wf = v.walk_forward;
 return el('section', { class: 'card' },
 el('h2', { text: 'Out-of-sample evidence — per-feature ablation' }),
-el('p', { class: 'sub', text: 'Miss multiplier = median of max(pred/actual, actual/pred) over held-out peers (1.0 perfect, 2.0 = typical peer missed by 2x). Coverage = share of held-out peers inside the error band printed from the OTHER peers, against the stated band size.' }),
+el('p', { class: 'sub', text: 'Miss = median of max(pred/actual, actual/pred) over held-out peers (2.0 = typical peer missed by 2x). Coverage = share of held-out peers inside the error band fitted from the OTHER peers, against the stated band size.' }),
 coef, tbl, notes,
 wf ? el('p', { class: 'footnote', text: 'Walk-forward ' + wf.split_date + ': ' + wf.older_train + ' train, ' + wf.newer_test + ' test — train blend ' + fmtMult(wf.older_multiple) + ' → ' + fmtMult(wf.newer_multiple) + ', MAE ' + fmtPct0(wf.median_absolute_error) + ' (' + (wf.mae_vs_loo <= 0 ? '-' : '+') + Math.abs(Math.round(wf.mae_vs_loo * 100)) + '% vs LOO).' })
 : el('p', { class: 'footnote', text: 'Too few dated peers for walk-forward; LOO is the honest test here.' }));
@@ -133,7 +133,7 @@ function oddsCard() {
 var o = D.odds;
 return el('section', { class: 'card' },
 el('h2', { text: 'Token odds — the peers\u2019 record, never a forecast' }),
-el('p', { class: 'sub ok', text: 'This page never says a token will launch: the odds are what the snapshot\u2019s own protocols did, bucketed by age. The implied value is a launch\u2019s size IF one comes.' }),
+el('p', { class: 'sub ok', text: 'No forecast of a launch: the odds are what the snapshot\u2019s own protocols did, bucketed by age. Implied value is a launch\u2019s size IF one comes.' }),
 el('div', { class: 'kv' },
 el('div', null, el('span', { text: 'Base rate: protocols with a token recorded' }), el('b', { text: fmtPct0(o.base_rate) })),
 el('div', null, el('span', { text: 'Brier, age-band estimate (leave-one-out)' }), el('b', { class: o.brier_loo < o.brier_base ? 'ok' : 'bad', text: o.brier_loo.toFixed(4) })),
@@ -285,7 +285,7 @@ td((v.perHour >= 0 ? '+' : '') + '$' + v.perHour.toFixed(2) + '/h', 'num'),
 td(r.on_watchlist ? 'watchlist' : 'early', 'num')));
 });
 return el('div', { class: 'panel' },
-el('p', { class: 'caption', text: 'Ranked by implied launch value — the model\u2019s claim, fitted from the snapshot\u2019s comparables. NET $/h recomputes live with the filter bar\u2019s deposit, haircut and horizon. Select a row for its build-up, farm plan, comparables and sensitivity.' }),
+el('p', { class: 'caption', text: 'Ranked by implied launch value — fitted from the snapshot\u2019s comparables. NET $/h recomputes live with the deposit, haircut and horizon controls. Select a row for its build-up, farm plan, comparables and sensitivity.' }),
 table([['#'], ['Protocol'], ['TVL', 'num'], ['7d', 'num'], ['Age', 'num'], ['Implied value'], ['Verdict', 'num'], ['NET $/h', 'num'], ['List', 'num']], tbody));
 }
 function openDetail(slug) {
@@ -331,7 +331,7 @@ el('div', null, el('span', { text: 'Capital charge (T-bill ' + (ASSUME.tbill * 1
 el('div', null, el('span', { text: '− cost' }), el('b', { text: '$' + v.cost.toFixed(2) })),
 el('div', null, el('span', { text: '+ reward (implied × odds × ' + (ASSUME.airdrop * 100) + '% ÷ farmers = ' + (ASSUME.farmerTvl * 100) + '% of TVL)' }), el('b', { text: '$' + fmtUsd(v.ev).slice(1) })),
 el('div', { class: 'result' }, el('span', { text: '= NET $/hr (' + '$' + (v.net >= 0 ? '+' : '') + v.net.toFixed(2) + ' over ' + Math.round(v.weeks * 168) + 'h)' }), el('b', { text: (v.perHour >= 0 ? '+' : '') + '$' + v.perHour.toFixed(2) + '/h' }))),
-el('p', { class: 'footnote', text: 'Rule: FARM clears $' + ASSUME.farmHourly + '/h; MARGINAL is positive under it; SKIP loses money. Here: ' + v.verdict + '. The tool ranks by value, not by hype — rank #1 can be a SKIP.' })));
+el('p', { class: 'footnote', text: 'Rule: FARM clears $' + ASSUME.farmHourly + '/h; MARGINAL is positive under it; SKIP loses money. Here: ' + v.verdict + ' — ranks by value, not hype.' })));
 var deposits = [50, 250, 1000, 5000], drops = [0, 0.2, 0.4];
 var sBody = el('tbody');
 deposits.forEach((dep) => {
@@ -359,7 +359,7 @@ var sc = el('section', { class: 'sec' });
 sc.appendChild(el('h3', { text: 'Cap vs TVL — peers, the fitted size curve, and this protocol (marked)' }));
 scatter(sc, slug);
 dialog.appendChild(sc);
-dialog.appendChild(el('p', { class: 'footnote', text: r.listed_at ? 'DefiLlama tracks this since ' + r.listed_at + '. "No token" = the snapshot records none. Odds are the peers\u2019 record, never a forecast; costs are estimates. Not financial advice.' : 'No listing date recorded for ' + r.name + '. Costs are estimates. Not financial advice.' }));
+dialog.appendChild(el('p', { class: 'footnote', text: r.listed_at ? 'Tracked since ' + r.listed_at + '. No token = the snapshot records none; odds are the peers\u2019 record; costs are estimates. Not financial advice.' : 'No listing date recorded; costs are estimates. Not financial advice.' }));
 document.getElementById('dialog-root').appendChild(dialog);
 if (dialog.showModal) dialog.showModal(); else dialog.setAttribute('open', '');
 }

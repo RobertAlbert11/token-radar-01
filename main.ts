@@ -1,67 +1,9 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { boardIssue, buildRadar, checksumOf, dataScript, parseSnapshot, SnapshotError } from './lib/model.ts';
-import { buildDossier } from './vendor/makefun-board.ts';
-const here = fileURLToPath(new URL('.', import.meta.url));
-const TEXT_MAX_BYTES = 65_536;
-const SCREENSHOT_CAPS = { max: 4, max_bytes: 524_288 };
-const IMAGE_NAME = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;
-function arg(name: string, fallback: string): string {
-const at = process.argv.indexOf(`--${name}`);
-if (at >= 0 && at + 1 < process.argv.length) return process.argv[at + 1]!;
-const withEquals = process.argv.find((a) => a.startsWith(`--${name}=`));
-return withEquals === undefined ? fallback : withEquals.slice(name.length + 3);
-}
-function fail(message: string): never {
-process.stderr.write(`yieldradar: ${message}\n`);
-process.exit(1);
-}
-const inputArg = arg('input', '/input');
-const inputFile = inputArg.endsWith('.json') ? inputArg : join(inputArg, 'snapshot.json');
-if (!existsSync(inputFile)) {
-fail(`no snapshot at ${inputFile}: pass --input <snapshot.json|directory> or mount the sealed /input`);
-}
-const out = arg('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
-let snapshot;
-try {
-snapshot = parseSnapshot(readFileSync(inputFile, 'utf8'));
-} catch (err) {
-fail(err instanceof SnapshotError ? err.message : `the snapshot at ${inputFile} cannot be read`);
-}
-const { board, radar } = buildRadar(snapshot);
-const issue = boardIssue(board, snapshot);
-if (issue !== null) fail(`the model wrote a board the gate refuses: ${issue}`);
-if (checksumOf(board) !== radar.checksum) fail('checksum mismatch between board and data');
-mkdirSync(out, { recursive: true });
-writeFileSync(join(out, 'board.json'), `${JSON.stringify({ rows: board, model_version: radar.model_version, as_of: radar.as_of })}\n`);
-writeFileSync(join(out, 'data.js'), dataScript(radar));
-function copyFiles(from: string, to: string): string[] {
-if (!existsSync(from)) return [];
-mkdirSync(to, { recursive: true });
-const copied: string[] = [];
-for (const name of readdirSync(from)) {
-if (name.startsWith('.')) continue;
-const path = join(from, name);
-if (!statSync(path).isFile()) continue;
-copyFileSync(path, join(to, name));
-copied.push(name);
-}
-return copied;
-}
-copyFiles(join(here, 'dashboard'), join(out, 'dashboard'));
-const shots = copyFiles(join(here, 'screenshots'), join(out, 'screenshots'));
-if (shots.length < 3) fail(`screenshots/ holds ${shots.length} images: hand in 3 — board, detail view, filtered view`);
-for (const name of shots) {
-if (!IMAGE_NAME.test(name)) fail(`screenshots/${name}: a name is letters, digits and . _ -, 1 to 128 characters`);
-}
-writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: { max_files: 400, max_bytes: 4_194_304 } }));
-const v = radar.validation, wf = v.walk_forward, ac = radar.accounting;
-process.stdout.write(
-`yieldradar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} watchlisted, ${board.length} rows scored (${radar.early_size} early below the floor)\n` +
-`yieldradar: fit — blended ${v.blended_multiple}x over ${v.peers_tested} peers; LOO MAE ${Math.round(v.loo.median_absolute_error * 100)}%, ${Math.round(v.loo.within_half * 100)}% within 2x\n` +
-(wf ? `yieldradar: walk-forward ${wf.older_train}→${wf.newer_test} (split ${wf.split_date}) MAE ${Math.round(wf.median_absolute_error * 100)}% (${wf.mae_vs_loo <= 0 ? '-' : '+'}${Math.abs(Math.round(wf.mae_vs_loo * 100))}% vs LOO)\n` : '') +
-`yieldradar: accounting — ${ac.buckets.map((b) => `${b.label} ${b.count}`).join(', ')}; sum ${ac.buckets.reduce((s, b) => s + b.count, 0)}\n` +
-`yieldradar: checksum ${radar.checksum}; top row ${board[0]!.name} at $${board[0]!.implied_value_usd.toLocaleString('en-US')} implied\n` +
-`yieldradar: wrote board.json, data.js, dashboard/, screenshots/ (${shots.length}) and dossier.json under ${out}\n`,
-);
+import{copyFileSync as j,existsSync as $,mkdirSync as g,readFileSync as x,readdirSync as E,statSync as M,writeFileSync as _}from"node:fs";import{join as t}from"node:path";import{fileURLToPath as k}from"node:url";import{boardIssue as A,buildRadar as O,checksumOf as F,dataScript as T,parseSnapshot as U,SnapshotError as L}from"./lib/model.ts";import{buildDossier as R}from"./vendor/makefun-board.ts";const b=k(new URL(".",import.meta.url)),N=65536,z={max:4,max_bytes:524288},I=/^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;function w(e,a){const i=process.argv.indexOf(`--${e}`);if(i>=0&&i+1<process.argv.length)return process.argv[i+1];const o=process.argv.find(h=>h.startsWith(`--${e}=`));return o===void 0?a:o.slice(e.length+3)}function d(e){process.stderr.write(`yieldradar: ${e}
+`),process.exit(1)}const f=w("input","/input"),p=f.endsWith(".json")?f:t(f,"snapshot.json");$(p)||d(`no snapshot at ${p}: pass --input <snapshot.json|directory> or mount the sealed /input`);const s=w("output",process.env.MAKEFUN_OUTPUT_DIR??"/output");let l;try{l=U(x(p,"utf8"))}catch(e){d(e instanceof L?e.message:`the snapshot at ${p} cannot be read`)}const{board:c,radar:r}=O(l),y=A(c,l);y!==null&&d(`the model wrote a board the gate refuses: ${y}`),F(c)!==r.checksum&&d("checksum mismatch between board and data"),g(s,{recursive:!0}),_(t(s,"board.json"),`${JSON.stringify({rows:c,model_version:r.model_version,as_of:r.as_of})}
+`),_(t(s,"data.js"),T(r));function v(e,a){if(!$(e))return[];g(a,{recursive:!0});const i=[];for(const o of E(e)){if(o.startsWith("."))continue;const h=t(e,o);M(h).isFile()&&(j(h,t(a,o)),i.push(o))}return i}v(t(b,"dashboard"),t(s,"dashboard"));const m=v(t(b,"screenshots"),t(s,"screenshots"));m.length<3&&d(`screenshots/ holds ${m.length} images: hand in 3 \u2014 board, detail view, filtered view`);for(const e of m)I.test(e)||d(`screenshots/${e}: a name is letters, digits and . _ -, 1 to 128 characters`);_(t(s,"dossier.json"),R(s,{text_max_bytes:N,screenshots:z,dashboard:{max_files:400,max_bytes:4194304}}));const u=r.validation,n=u.walk_forward,S=r.accounting;process.stdout.write(`yieldradar: ${l.protocols.length} protocols, ${l.watchlist.length} watchlisted, ${c.length} rows scored (${r.early_size} early below the floor)
+yieldradar: fit \u2014 blended ${u.blended_multiple}x over ${u.peers_tested} peers; LOO MAE ${Math.round(u.loo.median_absolute_error*100)}%, ${Math.round(u.loo.within_half*100)}% within 2x
+`+(n?`yieldradar: walk-forward ${n.older_train}\u2192${n.newer_test} (split ${n.split_date}) MAE ${Math.round(n.median_absolute_error*100)}% (${n.mae_vs_loo<=0?"-":"+"}${Math.abs(Math.round(n.mae_vs_loo*100))}% vs LOO)
+`:"")+`yieldradar: accounting \u2014 ${S.buckets.map(e=>`${e.label} ${e.count}`).join(", ")}; sum ${S.buckets.reduce((e,a)=>e+a.count,0)}
+yieldradar: checksum ${r.checksum}; top row ${c[0].name} at $${c[0].implied_value_usd.toLocaleString("en-US")} implied
+yieldradar: wrote board.json, data.js, dashboard/, screenshots/ (${m.length}) and dossier.json under ${s}
+`);
