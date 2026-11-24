@@ -110,10 +110,10 @@ el('p', { class: 'footnote ' + (sum === a.total ? 'ok' : 'bad'), text: 'buckets 
 function evidenceCard() {
 var e = D.evidence, v = D.validation;
 var coef = el('div', { class: 'kv' },
-el('div', null, el('span', { text: 'Fitted: log10 mcap/TVL = a + b·log10 TVL + c·growth + dummies' }), el('b', { text: 'a=' + e.intercept.toFixed(3) + ', b=' + e.size_slope.toFixed(3) + ', c=' + e.growth_coef.toFixed(3) })),
+el('div', null, el('span', { text: 'Fitted: log10 mcap/TVL = a + b·log10 TVL + c·growth + shrunk offsets' }), el('b', { text: 'a=' + e.intercept.toFixed(3) + ', b=' + e.size_slope.toFixed(3) + ', c=' + e.growth_coef.toFixed(3) })),
 el('div', null, el('span', { text: 'Implied multiple at $1B TVL (size term)' }), el('b', { text: fmtMult(e.at_1b) })),
 el('div', null, el('span', { text: 'Age curve, pre-token side' }), el('b', { text: 'F(age) = ' + D.model.patience_floor + ' + ' + (1 - D.model.patience_floor).toFixed(2) + ' · min(age, ' + D.model.patience_days + ')/' + D.model.patience_days })),
-el('div', null, el('span', { text: 'Production multiple' }), el('b', { text: 'robust per-category medians, damped ' + Math.round((1 - D.model.damping) * 100) + '/' + Math.round(D.model.damping * 100) + ' — the ablation is its lab check' })));
+el('div', null, el('span', { text: 'Production multiple' }), el('b', { text: 'size curve + clamped growth + offsets shrunk k/(k+' + D.model.shrink + ') — the ablation is its lab check' })));
 var tbl = table([['Feature set'], ['Kept', 'num'], ['LOO miss', 'num'], ['WF miss', 'num'], ['P25–P75 cov (≈50%)', 'num'], ['P10–P90 cov (≈80%)', 'num']],
 el('tbody', null, e.rows.map((r) => {
 return el('tr', null, td(r.label), td(r.kept ? 'kept' : 'not kept', r.kept ? 'ok' : 'sub'),
@@ -381,14 +381,15 @@ function kpi(label, value, sub, cls) {
 return el('div', { class: 'kpi' }, el('span', { class: 'kpi-label', text: label }),
 el('b', { class: 'kpi-value ' + (cls || ''), text: value }), el('span', { class: 'kpi-sub', text: sub }));
 }
+var keptRow = D.evidence.rows.find((r) => r.kept) || D.evidence.rows[D.evidence.rows.length - 1];
 return el('section', { class: 'kpi-strip' },
 kpi('Watchlist ranked', k.watchlist_covered + ' / ' + D.watchlist_size, 'floor, never ceiling', 'ok'),
 kpi('Pre-token rows', String(k.pre_token_rows), 'no token yet'),
 kpi('Token comps set aside', String(k.token_trading_rows), 'anchor the fit'),
 kpi('Implied value, total', fmtUsd(k.implied_total_usd), 'board total', 'ok'),
 kpi('LOO within 2x', fmtPct0(v.loo.within_half), 'held-out peers ±2x'),
-kpi('LOO miss', fmtMult(D.evidence.rows[D.evidence.rows.length - 1].loo_miss), 'held-out peers, median'),
-kpi('WF miss', v.walk_forward ? fmtMult(D.evidence.rows[D.evidence.rows.length - 1].wf_miss) : 'n/a', 'walk-forward, median'),
+kpi('LOO miss', fmtMult(keptRow.loo_miss), 'held-out peers, median'),
+kpi('WF miss', v.walk_forward ? fmtMult(keptRow.wf_miss) : 'n/a', 'walk-forward, median'),
 kpi('Brier vs base rate', D.odds.brier_loo.toFixed(3) + ' vs ' + D.odds.brier_base.toFixed(3), 'below baseline', D.odds.brier_loo < D.odds.brier_base ? 'ok' : ''));
 }
 function render() {
