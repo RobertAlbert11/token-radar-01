@@ -3,7 +3,7 @@
 var D = window.RADAR;
 if (!D) return;
 var app = document.getElementById('app');
-var state = { q: '', cat: 'all', chain: 'all', list: 'all', sort: 'rank', dir: 1, sel: null,
+var state = { q: '', cat: 'all', chain: 'all', list: 'all', sel: null,
 deposit: null, drop: 0, horizon: null, preset: null };
 function fmtUsd(n) {
 if (n === null || n === undefined || !isFinite(n)) return 'n/a';
@@ -108,38 +108,48 @@ return el('tr', null, td(b.label), td(b.count, 'num'), td(b.note, 'sub'));
 el('p', { class: 'footnote ' + (sum === a.total ? 'ok' : 'bad'), text: 'buckets sum to ' + sum + ' of ' + a.total + (sum === a.total ? ' — no silent drops' : ' — MISMATCH') }));
 }
 function evidenceCard() {
-var e = D.evidence, v = D.validation;
-var tbl = table([['Feature set'], ['Kept', 'num'], ['LOO miss', 'num'], ['WF miss', 'num'], ['P25–P75', 'num'], ['P10–P90', 'num']],
-el('tbody', null, e.rows.map((r) => {
-return el('tr', null, td(r.label), td(r.kept ? 'kept' : 'not kept', r.kept ? 'ok' : 'sub'),
-td(r.loo_miss.toFixed(2) + 'x', 'num'), td(r.wf_miss.toFixed(2) + 'x', 'num'),
-td(fmtPct0(r.cov50), 'num'), td(fmtPct0(r.cov80), 'num'));
-})));
-var coef = el('div', { class: 'kv' },
-el('div', null, el('span', { text: 'Fitted: log10 mcap/TVL = a + b·log10 TVL + c·growth + shrunk offsets' }), el('b', { text: 'a=' + e.intercept.toFixed(3) + ', b=' + e.size_slope.toFixed(3) + ', c=' + e.growth_coef.toFixed(3) })),
-el('div', null, el('span', { text: 'Implied multiple at $1B TVL (size term)' }), el('b', { text: fmtMult(e.at_1b) })),
-el('div', null, el('span', { text: 'Age curve, pre-token side' }), el('b', { text: 'F(age) = ' + D.model.patience_floor + ' + ' + (1 - D.model.patience_floor).toFixed(2) + ' · min(age, ' + D.model.patience_days + ')/' + D.model.patience_days })),
-el('div', null, el('span', { text: 'Production multiple' }), el('b', { text: 'size curve + clamped growth + offsets shrunk k/(k+' + D.model.shrink + ')' })));
-var notes = el('ul', { class: 'notes' }, e.rows.map((r) => { return el('li', { text: r.label + ' — ' + r.note }); }));
-var wf = v.walk_forward;
-return el('section', { class: 'card' },
-el('h2', { text: 'Out-of-sample evidence — per-feature ablation' }),
-el('p', { class: 'sub', text: 'Miss = median of max(pred/actual, actual/pred) over held-out peers (2.0 = typical peer missed by 2x). Coverage = share of held-out peers inside the band fitted from the OTHER peers.' }),
-tbl, coef, notes,
+  var e = D.evidence, v = D.validation, b = D.bootstrap;
+  var tbl = table([['Feature set'], ['Kept', 'num'], ['LOO miss', 'num'], ['WF miss', 'num'], ['P25–P75', 'num'], ['P10–P90', 'num']],
+  el('tbody', null, e.rows.map((r) => {
+  return el('tr', null, td(r.label), td(r.kept ? 'kept' : 'not kept', r.kept ? 'ok' : 'sub'),
+  td(r.loo_miss.toFixed(2) + 'x', 'num'), td(r.wf_miss.toFixed(2) + 'x', 'num'),
+  td(fmtPct0(r.cov50), 'num'), td(fmtPct0(r.cov80), 'num'));
+  })));
+  var coef = el('div', { class: 'kv' },
+  el('div', null, el('span', { text: 'Fitted: log10 mcap/TVL = a + b·log10 TVL + c·growth + shrunk offsets' }), el('b', { text: 'a=' + e.intercept.toFixed(3) + ', b=' + e.size_slope.toFixed(3) + ', c=' + e.growth_coef.toFixed(3) })),
+  el('div', null, el('span', { text: 'Bootstrap (' + b.refits + ' peer resamples): multiple at $1B TVL' }), el('b', { text: 'x' + b.coeff.at_1b.toFixed(2) + ' ± ' + b.coeff.at_1b_se.toFixed(2) })),
+  el('div', null, el('span', { text: 'Bootstrap: size slope per decade of TVL' }), el('b', { text: b.coeff.size_slope.toFixed(2) + ' ± ' + b.coeff.size_slope_se.toFixed(2) })),
+  el('div', null, el('span', { text: 'Age curve, pre-token side' }), el('b', { text: 'F(age) = ' + D.model.patience_floor + ' + ' + (1 - D.model.patience_floor).toFixed(2) + ' · min(age, ' + D.model.patience_days + ')/' + D.model.patience_days })));
+  var notes = el('ul', { class: 'notes' }, e.rows.map((r) => { return el('li', { text: r.label + ' — ' + r.note }); }));
+  var failed = e.rows.filter((r) => !r.kept && r.variant.indexOf('placebo') < 0).map((r) => r.label);
+  var reading = el('p', { class: 'footnote reading', text: 'Reading it: ' + failed.join('; ') + ' failed to price value held-out and were left out — their signal enters through the token odds, where a step is kept only if it lowers Brier on both CV and walk-forward.' });
+  var wf = v.walk_forward;
+  return el('section', { class: 'card' },
+  el('h2', { text: 'Out-of-sample evidence — per-feature ablation' }),
+  el('p', { class: 'sub', text: 'Miss = median of max(pred/actual, actual/pred) over held-out peers; coverage = share inside the band fitted from the OTHER peers.' }),
+  tbl, coef, reading, notes,
 wf ? el('p', { class: 'footnote', text: 'Walk-forward ' + wf.split_date + ': ' + wf.older_train + ' train, ' + wf.newer_test + ' test — train blend ' + fmtMult(wf.older_multiple) + ' → ' + fmtMult(wf.newer_multiple) + ', MAE ' + fmtPct0(wf.median_absolute_error) + ' (' + (wf.mae_vs_loo <= 0 ? '-' : '+') + Math.abs(Math.round(wf.mae_vs_loo * 100)) + '% vs LOO).' })
 : el('p', { class: 'footnote', text: 'Too few dated peers for walk-forward; LOO is the honest test here.' }));
 }
 function oddsCard() {
-var o = D.odds;
-return el('section', { class: 'card' },
-el('h2', { text: 'Token odds — the peers\u2019 record, never a forecast' }),
-el('p', { class: 'sub ok', text: 'No forecast of a launch: the odds are what the snapshot\u2019s own protocols did, bucketed by age. Implied value is a launch\u2019s size IF one comes.' }),
-el('div', { class: 'kv' },
-el('div', null, el('span', { text: 'Base rate: protocols with a token recorded' }), el('b', { text: fmtPct0(o.base_rate) })),
-el('div', null, el('span', { text: 'Brier, age-band estimate (leave-one-out)' }), el('b', { class: o.brier_loo < o.brier_base ? 'ok' : 'bad', text: o.brier_loo.toFixed(4) })),
-el('div', null, el('span', { text: 'Brier, base-rate-only baseline' }), el('b', { text: o.brier_base.toFixed(4) })),
-el('div', null, el('span', { text: 'Brier, walk-forward (older bands → newer test)' }), el('b', { text: o.brier_wf === null ? 'n/a' : o.brier_wf.toFixed(4) }))),
-el('p', { class: 'footnote', text: o.note }));
+  var o = D.odds;
+  var steps = table([['Logistic step'], ['Kept', 'num'], ['10-fold Brier', 'num'], ['WF Brier', 'num']],
+  el('tbody', null, o.steps.map((s) => {
+  return el('tr', null, td(s.term), td(s.kept ? 'kept' : 'out', s.kept ? 'ok' : 'sub'),
+  td(s.brier_10f.toFixed(4), 'num'), td(s.brier_wf === null ? 'n/a' : s.brier_wf.toFixed(4), 'num'));
+  })));
+  var coefs = el('div', { class: 'kv' }, o.coefs.map((c) => {
+  return el('div', null, el('span', { text: 'logit ' + c.name }), el('b', { text: c.coef.toFixed(2) + ' ± ' + c.se.toFixed(2) + ' (' + o.refits + ' boot refits)' }));
+  }));
+  return el('section', { class: 'card' },
+  el('h2', { text: 'Token odds — the peers\u2019 record, never a forecast' }),
+  el('p', { class: 'sub ok', text: 'No forecast of a launch: the odds are what the snapshot\u2019s own protocols did.' }),
+  el('div', { class: 'kv' },
+  el('div', null, el('span', { text: 'Base rate: protocols with a token recorded' }), el('b', { text: fmtPct0(o.base_rate) })),
+  el('div', null, el('span', { text: 'Brier, kept logistic model (ten-fold / walk-forward)' }), el('b', { class: o.brier_loo < o.brier_base ? 'ok' : 'bad', text: o.brier_loo.toFixed(4) + ' / ' + (o.brier_wf === null ? 'n/a' : o.brier_wf.toFixed(4)) })),
+  el('div', null, el('span', { text: 'Brier, base-rate-only baseline' }), el('b', { text: o.brier_base.toFixed(4) }))),
+  steps, coefs,
+  el('p', { class: 'footnote', text: o.note }));
 }
 function modelCard() {
 var m = D.model;
@@ -151,7 +161,7 @@ el('div', null, el('span', { text: 'Category multiple' }), el('b', { text: 'medi
 el('div', null, el('span', { text: 'Trend' }), el('b', { text: 'clamped ' + m.trend_floor + '…' + m.trend_cap + '% × ' + m.growth_weight })),
 el('div', null, el('span', { text: 'Patience' }), el('b', { text: '' + m.patience_floor + ' at listing → 1.00 at ' + m.patience_days + 'd; unknown age = ' + m.unknown_age_days + 'd' })),
 el('div', null, el('span', { text: 'Band' }), el('b', { text: 'clamped ' + m.multiple_min + '–' + m.multiple_max + 'x' }))),
-el('p', { class: 'sub', text: 'One function scores every protocol; no name is special-cased. Age discounts, not rewards: longer with no token, less scarcity value.' }));
+el('p', { class: 'sub', text: 'One function scores every protocol; no name is special-cased. Age discounts, not rewards.' }));
 }
 function scatter(host, slug) {
 var W = 560, H = 270;
@@ -177,7 +187,7 @@ box.appendChild(el('span', { class: 'ax y', text: '↑ log10 market cap (fitted 
 host.appendChild(box);
 }
 function controls(categories, chains) {
-var search = el('input', { type: 'search', id: 'q', placeholder: 'Search name, category or chain…', value: state.q });
+var search = el('input', { type: 'search', id: 'q', placeholder: 'Search…', value: state.q });
 search.addEventListener('input', () => { state.q = search.value; render(); });
 var catSel = el('select', { id: 'cat' }, el('option', { value: 'all', text: 'All categories' }),
 categories.map((c) => { return el('option', { value: c, text: c }); }));
@@ -188,11 +198,11 @@ chains.map((c) => { return el('option', { value: c, text: c }); }));
 chainSel.value = state.chain;
 chainSel.addEventListener('change', () => { state.chain = chainSel.value; render(); });
 var dep = el('select', { id: 'dep' },
-[null, 50, 100, 250, 500, 1000, 5000].map((d) => { return el('option', { value: d === null ? '' : String(d), text: d === null ? 'Default capital' : '$' + d + ' deposit' }); }));
+[null, 50, 100, 250, 500, 1000, 5000].map((d) => { return el('option', { value: d === null ? '' : String(d), text: d === null ? 'Default cap' : '$' + d + ' deposit' }); }));
 dep.value = state.deposit === null ? '' : String(state.deposit);
 dep.addEventListener('change', () => { state.deposit = dep.value ? Number(dep.value) : null; render(); });
 var drop = el('select', { id: 'drop' },
-[0, 0.2, 0.4].map((d) => { return el('option', { value: String(d), text: d === 0 ? 'Reward haircut 0%' : 'Reward haircut ' + Math.round(d * 100) + '%' }); }));
+[0, 0.2, 0.4].map((d) => { return el('option', { value: String(d), text: d === 0 ? 'No haircut' : Math.round(d * 100) + '% haircut' }); }));
 drop.value = String(state.drop);
 drop.addEventListener('change', () => { state.drop = Number(drop.value); render(); });
 var hor = el('select', { id: 'hor' },
@@ -203,7 +213,6 @@ function chip(key, label, preset) {
 return el('button', { class: 'chip', type: 'button', 'aria-pressed': state.list === key ? 'true' : 'false', text: label,
 onclick: () => { state.list = key; if (preset) Object.assign(state, preset); render(); } });
 }
-var csv = el('button', { class: 'chip', type: 'button', text: 'Export CSV', onclick: exportCsv });
 return el('div', { class: 'controls' },
 el('div', { class: 'field' }, el('label', { for: 'q', text: 'Search' }), search),
 el('div', { class: 'field' }, el('label', { for: 'cat', text: 'Category' }), catSel),
@@ -213,32 +222,14 @@ el('div', { class: 'field' }, el('label', { for: 'drop', text: 'Reward' }), drop
 el('div', { class: 'field' }, el('label', { for: 'hor', text: 'Horizon' }), hor),
 el('div', { class: 'field' }, el('span', { class: 'label', text: 'Presets' }),
 el('div', { class: 'chips' },
-chip('all', 'All rows'), chip('watchlist', 'Watchlist 40'),
-chip('farm', 'FARM verdicts', { preset: 'farm' }),
-chip('growth', 'TVL growing ≥10%', { preset: 'growth' }),
-csv)));
+chip('all', 'All rows'), chip('watchlist', 'Watchlist'),
+chip('farm', 'FARM', { preset: 'farm' }),
+chip('growth', 'Growth ≥10%', { preset: 'growth' }))));
 }
 function presetFilter(r) {
 if (state.preset === 'farm') return verdictOf(r).verdict === 'FARM';
 if (state.preset === 'growth') return (r.change_7d || 0) >= 10;
 return true;
-}
-function exportCsv() {
-var head = 'rank,name,category,chains,tvl_usd,change_7d,age_days,implied_value_usd,multiple,trend_mult,patience_mult,verdict,net_per_hour,total_cost,expected_reward\n';
-var body = filtered().map((r) => {
-var v = verdictOf(r);
-return [r.rank, r.name, r.category || '', r.chains.join('|'), r.tvl_usd, r.change_7d === null ? '' : r.change_7d,
-r.age_days === null ? '' : r.age_days, r.implied_value_usd, r.multiple, r.trend_mult, r.patience_mult,
-v.verdict, v.perHour.toFixed(2), Math.round(v.cost), Math.round(v.ev)].join(',');
-}).join('\n');
-var a = el('a', { href: 'data:text/csv;charset=utf-8,' + encodeURIComponent(head + body), download: 'yieldradar-board.csv' });
-document.body.appendChild(a); a.click(); a.remove();
-}
-function sortHeader(key, label) {
-var active = state.sort === key;
-return el('th', { scope: 'col' }, el('button', { type: 'button',
-onclick: () => { if (state.sort === key) state.dir = -state.dir; else { state.sort = key; state.dir = key === 'rank' ? 1 : -1; } render(); } },
-label, active ? el('span', { 'aria-hidden': 'true', text: state.dir < 0 ? ' ↓' : ' ↑' }) : null));
 }
 function filtered() {
 var q = state.q.trim().toLowerCase();
@@ -251,21 +242,8 @@ if (!q) return true;
 return [r.name, r.slug, r.category, r.chains.join(' ')].join(' ').toLowerCase().indexOf(q) >= 0;
 });
 }
-function sorted(list) {
-var key = state.sort, dir = state.dir;
-return list.slice().sort((a, b) => {
-var av, bv;
-if (key === 'name') { av = a.name.toLowerCase(); bv = b.name.toLowerCase(); }
-else if (key === 'tvl') { av = a.tvl_usd; bv = b.tvl_usd; }
-else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
-else if (key === 'age') { av = a.age_days === null ? -Infinity : a.age_days; bv = b.age_days === null ? -Infinity : b.age_days; }
-else if (key === 'net') { av = verdictOf(a).perHour; bv = verdictOf(b).perHour; }
-else { av = a.rank; bv = b.rank; }
-return av < bv ? -dir : av > bv ? dir : a.slug < b.slug ? -1 : 1;
-});
-}
 function boardTable() {
-var list = sorted(filtered());
+var list = filtered();
 var max = Math.max.apply(null, list.map((r) => r.implied_value_usd)) || 1;
 var tbody = el('tbody');
 list.forEach((r) => {
@@ -280,13 +258,14 @@ td(fmtAge(r.age_days), 'num'),
 el('td', null, el('div', { class: 'implied' },
 el('div', { class: 'bar' }, el('i', { style: 'width:' + Math.max(2, Math.round(r.implied_value_usd / max * 100)) + '%' })),
 el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) }))),
+td(fmtUsd(r.implied_p25) + '–' + fmtUsd(r.implied_p75) + ' / ' + fmtUsd(r.implied_p10) + '–' + fmtUsd(r.implied_p90), 'num'),
 td(v.verdict, 'num ' + v.verdict.toLowerCase()),
 td((v.perHour >= 0 ? '+' : '') + '$' + v.perHour.toFixed(2) + '/h', 'num'),
 td(r.on_watchlist ? 'watchlist' : 'early', 'num')));
 });
 return el('div', { class: 'panel' },
-el('p', { class: 'caption', text: 'Ranked by implied launch value — fitted from the snapshot\u2019s comparables. NET $/h recomputes live with the deposit, haircut and horizon controls. Select a row for its build-up, farm plan, comparables and sensitivity.' }),
-table([['#'], ['Protocol'], ['TVL', 'num'], ['7d', 'num'], ['Age', 'num'], ['Implied value'], ['Verdict', 'num'], ['NET $/h', 'num'], ['List', 'num']], tbody));
+el('p', { class: 'caption', text: 'Ranked by implied launch value — fitted from the snapshot\u2019s comparables. Boot columns: implied-value ranges across ' + D.bootstrap.refits + ' peer resamples. NET $/h recomputes live with the deposit, haircut and horizon controls. Select a row for build-up, farm plan, comparables, sensitivity.' }),
+table([['#'], ['Protocol'], ['TVL', 'num'], ['7d', 'num'], ['Age', 'num'], ['Implied value'], ['P25–75 / P10–90 (boot)', 'num'], ['Verdict', 'num'], ['NET $/h', 'num'], ['List', 'num']], tbody));
 }
 function openDetail(slug) {
 var r = null;
@@ -307,8 +286,9 @@ el('div', { class: 'verdict-banner ' + v.verdict.toLowerCase(), text: v.verdict 
 el('button', { class: 'close', type: 'button', text: '✕', onclick: () => { dialog.close(); } })));
 dialog.appendChild(head);
 dialog.appendChild(el('section', { class: 'sec' },
-el('h3', { text: 'Value build-up — the literal formula, every step recomputable' }),
-el('div', { class: 'hero' }, el('b', { text: fmtUsd(r.implied_value_usd) }), el('span', { text: 'implied launch value (' + D.model_version + ' model)' })),
+el('h3', { text: 'Value build-up — the literal formula, recomputable' }),
+el('div', { class: 'hero' }, el('b', { text: fmtUsd(r.implied_value_usd) }), el('span', { text: 'implied launch value (' + D.model_version + ')' })),
+el('p', { class: 'sub', text: 'Bootstrap: rank ' + r.rank_low + '–' + r.rank_high + ' across ' + D.bootstrap.refits + ' refits · implied P25–P75 ' + fmtUsd(r.implied_p25) + '–' + fmtUsd(r.implied_p75) + ' · P10–P90 ' + fmtUsd(r.implied_p10) + '–' + fmtUsd(r.implied_p90) }),
 el('div', { class: 'equation' },
 el('div', null, el('span', { text: 'TVL (snapshot)' }), el('b', { text: fmtUsd(r.tvl_usd) })),
 el('div', null, el('span', { text: '× multiple — ' + r.multiple_source }), el('b', { text: fmtMult(r.multiple) })),
@@ -316,9 +296,9 @@ el('div', null, el('span', { text: '× trend (7d ' + (r.change_7d === null ? 'n/
 el('div', null, el('span', { text: '× patience: F(age=' + fmtAge(r.age_days) + ') = ' + D.model.patience_floor + '+0.45·min(age,' + D.model.patience_days + ')/' + D.model.patience_days }), el('b', { text: r.patience_mult.toFixed(3) + 'x' })),
 el('div', { class: 'result' }, el('span', { text: '= launch value (in-page recompute: ' + fmtUsd(re) + (re === r.implied_value_usd ? ' ✓ matches board.json' : ' ✗ differs') + ')' }), el('b', { text: fmtUsd(r.implied_value_usd) }))),
 el('div', { class: 'equation odds' },
-el('div', null, el('span', { text: '× token odds (age-band record)' }), el('b', { text: fmtPct0((D.odds.by_slug && D.odds.by_slug[r.slug]) || D.odds.base_rate) })),
+el('div', null, el('span', { text: '× token odds (peers\u2019 record, logistic)' }), el('b', { text: fmtPct0((D.odds.by_slug && D.odds.by_slug[r.slug]) || D.odds.base_rate) })),
 el('div', { class: 'result' }, el('span', { text: '= value × odds — the launch in expectation' }), el('b', { text: fmtUsd(r.implied_value_usd * ((D.odds.by_slug && D.odds.by_slug[r.slug]) || D.odds.base_rate)) }))),
-el('p', { class: 'footnote honesty', text: 'Honesty line: no forecast of a launch — the odds are what the snapshot\u2019s own protocols did; implied value is a launch\u2019s size IF one comes.' })));
+el('p', { class: 'footnote honesty', text: 'Honesty: no forecast — the odds are what the snapshot\u2019s own protocols did; implied value is a launch\u2019s size IF one comes.' })));
 var steps = farmStepsOf(r);
 var stepsSec = el('section', { class: 'sec' },
 el('h3', { text: 'Farm plan — ' + steps.length + ' steps, each costed and timed' }),
@@ -338,19 +318,16 @@ return td((vv.net >= 0 ? '+' : '') + '$' + Math.round(vv.net), 'num ' + (vv.net 
 sBody.appendChild(el('tr', null, td('$' + dep + ' deposit', 'num'), cells[0], cells[1], cells[2]));
 });
 var sensSec = el('section', { class: 'sec' },
-el('h3', { text: 'Sensitivity — NET $ over the hold, deposit × reward haircut (all costs included)' }),
+el('h3', { text: 'Sensitivity — NET $ over the hold, deposit × haircut (all costs included)' }),
 table([[''], ['Drop 0%', 'num'], ['Drop 20%', 'num'], ['Drop 40%', 'num']], sBody));
 var compsSec = el('section', { class: 'sec' },
-el('h3', { text: 'Nearest traded comparables — each fitted WITHOUT itself' }),
+el('h3', { text: 'Nearest traded comparables — each fitted without itself' }),
 table([['Peer', 'num'], ['TVL', 'num'], ['Market cap', 'num'], ['mcap/TVL', 'num'], ['Blind fit', 'num'], ['Miss', 'num']],
 el('tbody', null, r.comps.map((c) => {
 return el('tr', null, td(c.name), td(fmtUsd(c.tvl_usd), 'num'), td(fmtUsd(c.mcap_usd), 'num'),
 td(fmtMult(c.ratio), 'num'), td(fmtMult(c.blind_multiple), 'num'), td(c.miss.toFixed(2) + 'x', 'num ' + (c.miss <= 2 ? 'pos' : 'neg')));
 }))),
 el('p', { class: 'footnote', text: 'Each peer\u2019s multiple was fitted from the OTHER peers, never itself; Miss = max(fit/actual, actual/fit).' }));
-var sc = el('section', { class: 'sec' });
-sc.appendChild(el('h3', { text: 'Cap vs TVL — peers, the fitted size curve, and this protocol (marked)' }));
-scatter(sc, slug);
 var costSec = el('section', { class: 'sec' },
 el('h3', { text: 'Cost breakdown → one number: NET $/hour' }),
 el('div', { class: 'equation' },
@@ -358,17 +335,17 @@ el('div', null, el('span', { text: 'Gas (' + r.verdict.one_time_gas + '+' + r.ve
 el('div', null, el('span', { text: 'Swap fee (' + (ASSUME.swap * 100).toFixed(1) + '% of $' + v.capital + ' round trip)' }), el('b', { text: '$' + v.swap.toFixed(2) })),
 el('div', null, el('span', { text: 'Capital charge (T-bill ' + (ASSUME.tbill * 100).toFixed(2) + '% × ' + v.weeks + '/52 of $' + v.capital + ')' }), el('b', { text: '$' + v.charge.toFixed(2) })),
 el('div', null, el('span', { text: '− cost' }), el('b', { text: '$' + v.cost.toFixed(2) })),
-el('div', null, el('span', { text: '+ reward (implied × odds × ' + (ASSUME.airdrop * 100) + '% ÷ farmers = ' + (ASSUME.farmerTvl * 100) + '% of TVL)' }), el('b', { text: '$' + fmtUsd(v.ev).slice(1) })),
+el('div', null, el('span', { text: '+ reward (implied × odds × ' + (ASSUME.airdrop * 100) + '% ÷ farmers = ' + (ASSUME.farmerTvl * 100) + '% TVL)' }), el('b', { text: '$' + fmtUsd(v.ev).slice(1) })),
 el('div', { class: 'result' }, el('span', { text: '= NET $/hr (' + '$' + (v.net >= 0 ? '+' : '') + v.net.toFixed(2) + ' over ' + Math.round(v.weeks * 168) + 'h)' }), el('b', { text: (v.perHour >= 0 ? '+' : '') + '$' + v.perHour.toFixed(2) + '/h' }))),
-el('p', { class: 'footnote', text: 'Rule: FARM clears $' + ASSUME.farmHourly + '/h; MARGINAL is positive under it; SKIP loses money. Here: ' + v.verdict + ' — ranks by value, not hype.' }));
+el('p', { class: 'footnote', text: 'Rule: FARM clears $' + ASSUME.farmHourly + '/h; MARGINAL positive under it; SKIP loses money. Here: ' + v.verdict + '.' }));
 var sc = el('section', { class: 'sec' });
-sc.appendChild(el('h3', { text: 'Cap vs TVL — peers, the fitted size curve, and this protocol (marked)' }));
+sc.appendChild(el('h3', { text: 'Cap vs TVL — peers, the fitted size curve, this protocol (marked)' }));
 scatter(sc, slug);
 var duoA = el('div', { class: 'duo duo-pad' }); duoA.appendChild(dialog.querySelector('.sec')); duoA.appendChild(costSec);
 var duoB = el('div', { class: 'duo duo-pad' }); duoB.appendChild(stepsSec); duoB.appendChild(sensSec);
 var duoC = el('div', { class: 'duo duo-pad' }); duoC.appendChild(compsSec); duoC.appendChild(sc);
 dialog.appendChild(duoA); dialog.appendChild(duoB); dialog.appendChild(duoC);
-dialog.appendChild(el('p', { class: 'footnote detail-foot', text: r.listed_at ? 'Tracked since ' + r.listed_at + '. No token = the snapshot records none; odds are the peers\u2019 record; costs are estimates. Not financial advice.' : 'No listing date recorded; costs are estimates. Not financial advice.' }));
+dialog.appendChild(el('p', { class: 'footnote detail-foot', text: r.listed_at ? 'Tracked since ' + r.listed_at + '. No token recorded; odds are the peers\u2019 record; costs are estimates. Not financial advice.' : 'No listing date recorded; costs are estimates. Not financial advice.' }));
 document.getElementById('dialog-root').appendChild(dialog);
 if (dialog.showModal) dialog.showModal(); else dialog.setAttribute('open', '');
 }
@@ -381,7 +358,7 @@ return { text: t.slice(0, at), cost: t.slice(at + 7, tm), time: t.slice(tm + 8, 
 function masthead() {
 return el('header', { class: 'top' },
 el('div', { class: 'brand' }, el('span', { class: 'mark' }), el('span', { class: 'brand-name', text: 'YieldRadar' })),
-el('span', { class: 'nonet', text: 'NO network · no fetch · reads only its own data.js' }),
+el('span', { class: 'nonet', text: 'NO network · no fetch · reads only its data.js' }),
 el('span', { class: 'sub', text: 'snapshot ' + D.as_of + ' · ' + D.model_version + ' · ' + D.accounting.total + ' protocols · checksum ' + D.checksum }));
 }
 function kpiStrip() {
@@ -394,11 +371,13 @@ var keptRow = D.evidence.rows.find((r) => r.kept) || D.evidence.rows[D.evidence.
 return el('section', { class: 'kpi-strip', 'aria-label': 'Key metrics' },
 kpi('Watchlist ranked', k.watchlist_covered + ' / ' + D.watchlist_size, 'of ' + D.board_size + ' rows ranked', 'ok'),
 kpi('Ranked rows', String(D.board_size), 'every watchlist name in', 'ok'),
-kpi('LOO miss', fmtMult(keptRow.loo_miss), 'held-out peers, median'),
-kpi('WF miss', v.walk_forward ? fmtMult(keptRow.wf_miss) : 'n/a', 'walk-forward, median'),
+kpi('LOO miss', fmtMult(keptRow.loo_miss), 'held-out, median'),
+kpi('WF miss', v.walk_forward ? fmtMult(keptRow.wf_miss) : 'n/a', 'walk-fwd, median'),
 kpi('Brier vs base', D.odds.brier_loo.toFixed(3) + ' vs ' + D.odds.brier_base.toFixed(3), 'below baseline', D.odds.brier_loo < D.odds.brier_base ? 'ok' : ''),
 kpi('Coverage P25–P75', fmtPct0(keptRow.cov50), 'of held-out peers in band'),
 kpi('LOO within 2x', fmtPct0(v.loo.within_half), 'held-out peers ±2x'),
+kpi('Caps in P25–P75', fmtPct0(D.bootstrap.cov50), 'held-out caps (stated 50%)', D.bootstrap.cov50 >= 0.5 ? 'ok' : ''),
+kpi('Caps in P10–P90', fmtPct0(D.bootstrap.cov80), 'held-out caps (stated 80%)', D.bootstrap.cov80 >= 0.8 ? 'ok' : ''),
 kpi('Implied value, total', fmtUsd(k.implied_total_usd), 'board total', 'ok'));
 }
 function render() {

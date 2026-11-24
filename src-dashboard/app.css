@@ -1,7 +1,7 @@
 :root {
---a: #0a0e14; --b: #111827; --c: #1a2332; --d: #e8eef5; --e: #7a8ba0;
---f: #1e2d3f; --g: #30e89b; --h: #f2b544; --i: #e5654f; --j: #5ba3f0;
---k: system-ui, sans-serif; --l: ui-monospace, Menlo, Consolas, monospace;
+--a:#0a0e14; --b:#111827; --c:#1a2332; --d:#e8eef5; --e:#7a8ba0;
+--f:#1e2d3f; --g:#30e89b; --h:#f2b544; --i:#e5654f; --j:#5ba3f0;
+--k:system-ui, sans-serif; --l:ui-monospace, Menlo, Consolas, monospace;
 }
 * { box-sizing: border-box; }
 html { color-scheme: dark; }
