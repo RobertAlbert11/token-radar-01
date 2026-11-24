@@ -122,14 +122,14 @@ function evidenceCard() {
   el('div', null, el('span', { text: 'Age curve, pre-token side' }), el('b', { text: 'F(age) = ' + D.model.patience_floor + ' + ' + (1 - D.model.patience_floor).toFixed(2) + ' · min(age, ' + D.model.patience_days + ')/' + D.model.patience_days })));
   var notes = el('ul', { class: 'notes' }, e.rows.map((r) => { return el('li', { text: r.label + ' — ' + r.note }); }));
   var failed = e.rows.filter((r) => !r.kept && r.variant.indexOf('placebo') < 0).map((r) => r.label);
-  var reading = el('p', { class: 'footnote reading', text: 'Reading it: ' + failed.join('; ') + ' failed to price value held-out and were left out — their signal enters through the token odds, where a step is kept only if it lowers Brier on both CV and walk-forward.' });
+  var reading = el('p', { class: 'footnote reading', text: 'Reading it: ' + failed.join('; ') + ' failed held-out — their signal enters only via the token odds, where a step is kept if it lowers Brier on both CV and WF.' });
   var wf = v.walk_forward;
   return el('section', { class: 'card' },
   el('h2', { text: 'Out-of-sample evidence — per-feature ablation' }),
-  el('p', { class: 'sub', text: 'Miss = median of max(pred/actual, actual/pred) over held-out peers; coverage = share inside the band fitted from the OTHER peers.' }),
+  el('p', { class: 'sub', text: 'Miss = median of max(pred/actual, actual/pred) held-out; coverage = share inside the band from OTHER peers.' }),
   tbl, coef, reading, notes,
 wf ? el('p', { class: 'footnote', text: 'Walk-forward ' + wf.split_date + ': ' + wf.older_train + ' train, ' + wf.newer_test + ' test — train blend ' + fmtMult(wf.older_multiple) + ' → ' + fmtMult(wf.newer_multiple) + ', MAE ' + fmtPct0(wf.median_absolute_error) + ' (' + (wf.mae_vs_loo <= 0 ? '-' : '+') + Math.abs(Math.round(wf.mae_vs_loo * 100)) + '% vs LOO).' })
-: el('p', { class: 'footnote', text: 'Too few dated peers for walk-forward; LOO is the honest test here.' }));
+: el('p', { class: 'footnote', text: 'Too few dated peers for walk-forward; LOO is the honest test.' }));
 }
 function oddsCard() {
   var o = D.odds;
@@ -142,11 +142,11 @@ function oddsCard() {
   return el('div', null, el('span', { text: 'logit ' + c.name }), el('b', { text: c.coef.toFixed(2) + ' ± ' + c.se.toFixed(2) + ' (' + o.refits + ' boot refits)' }));
   }));
   return el('section', { class: 'card' },
-  el('h2', { text: 'Token odds — the peers\u2019 record, never a forecast' }),
-  el('p', { class: 'sub ok', text: 'No forecast of a launch: the odds are what the snapshot\u2019s own protocols did.' }),
+  el('h2', { text: 'Token odds — the peers\u2019 record' }),
+  el('p', { class: 'sub ok', text: 'No forecast of a launch: the odds are what the snapshot\u2019s peers did.' }),
   el('div', { class: 'kv' },
-  el('div', null, el('span', { text: 'Base rate: protocols with a token recorded' }), el('b', { text: fmtPct0(o.base_rate) })),
-  el('div', null, el('span', { text: 'Brier, kept logistic model (ten-fold / walk-forward)' }), el('b', { class: o.brier_loo < o.brier_base ? 'ok' : 'bad', text: o.brier_loo.toFixed(4) + ' / ' + (o.brier_wf === null ? 'n/a' : o.brier_wf.toFixed(4)) })),
+  el('div', null, el('span', { text: 'Base rate: protocols with a token' }), el('b', { text: fmtPct0(o.base_rate) })),
+  el('div', null, el('span', { text: 'Brier, kept logistic (ten-fold / WF)' }), el('b', { class: o.brier_loo < o.brier_base ? 'ok' : 'bad', text: o.brier_loo.toFixed(4) + ' / ' + (o.brier_wf === null ? 'n/a' : o.brier_wf.toFixed(4)) })),
   el('div', null, el('span', { text: 'Brier, base-rate-only baseline' }), el('b', { text: o.brier_base.toFixed(4) }))),
   steps, coefs,
   el('p', { class: 'footnote', text: o.note }));
@@ -155,13 +155,13 @@ function modelCard() {
 var m = D.model;
 return el('section', { class: 'card' },
 el('h2', { text: 'How implied value is computed' }),
-el('div', { class: 'formula', text: 'implied = round( tvl_usd × category_multiple × trend × patience ), trend = 1 + clamp(change_7d,' + m.trend_floor + ',' + m.trend_cap + ')/100×' + m.growth_weight + ', patience = ' + m.patience_floor + '+0.45·min(age,' + m.patience_days + ')/' + m.patience_days }),
+el('div', { class: 'formula', text: 'implied = round( tvl × category_multiple × trend × patience ), trend = 1 + clamp(change_7d,' + m.trend_floor + ',' + m.trend_cap + ')/100×' + m.growth_weight + ', patience = ' + m.patience_floor + '+0.45·min(age,' + m.patience_days + ')/' + m.patience_days }),
 el('div', { class: 'kv' },
-el('div', null, el('span', { text: 'Category multiple' }), el('b', { text: 'median peer mcap/TVL, damped to the blend (' + fmtMult(D.validation.blended_multiple) + ')' })),
+el('div', null, el('span', { text: 'Category multiple' }), el('b', { text: 'median peer mcap/TVL, damped to blend (' + fmtMult(D.validation.blended_multiple) + ')' })),
 el('div', null, el('span', { text: 'Trend' }), el('b', { text: 'clamped ' + m.trend_floor + '…' + m.trend_cap + '% × ' + m.growth_weight })),
 el('div', null, el('span', { text: 'Patience' }), el('b', { text: '' + m.patience_floor + ' at listing → 1.00 at ' + m.patience_days + 'd; unknown age = ' + m.unknown_age_days + 'd' })),
 el('div', null, el('span', { text: 'Band' }), el('b', { text: 'clamped ' + m.multiple_min + '–' + m.multiple_max + 'x' }))),
-el('p', { class: 'sub', text: 'One function scores every protocol; no name is special-cased. Age discounts, not rewards.' }));
+el('p', { class: 'sub', text: 'One function scores every protocol; no name special-cased. Age discounts.' }));
 }
 function scatter(host, slug) {
 var W = 560, H = 270;
@@ -264,7 +264,7 @@ td((v.perHour >= 0 ? '+' : '') + '$' + v.perHour.toFixed(2) + '/h', 'num'),
 td(r.on_watchlist ? 'watchlist' : 'early', 'num')));
 });
 return el('div', { class: 'panel' },
-el('p', { class: 'caption', text: 'Ranked by implied launch value — fitted from the snapshot\u2019s comparables. Boot columns: implied-value ranges across ' + D.bootstrap.refits + ' peer resamples. NET $/h recomputes live with the deposit, haircut and horizon controls. Select a row for build-up, farm plan, comparables, sensitivity.' }),
+el('p', { class: 'caption', text: 'Ranked by implied launch value — fitted from the snapshot\u2019s comparables. Boot columns: ranges across ' + D.bootstrap.refits + ' peer resamples, inflation ×' + D.bootstrap.inflation + ' fitted on held-out peers (blind, leave-self-out). NET $/h recomputes live with deposit, haircut, horizon. Select a row for build-up, farm plan, comps, sensitivity.' }),
 table([['#'], ['Protocol'], ['TVL', 'num'], ['7d', 'num'], ['Age', 'num'], ['Implied value'], ['P25–75 / P10–90 (boot)', 'num'], ['Verdict', 'num'], ['NET $/h', 'num'], ['List', 'num']], tbody));
 }
 function openDetail(slug) {
@@ -286,9 +286,9 @@ el('div', { class: 'verdict-banner ' + v.verdict.toLowerCase(), text: v.verdict 
 el('button', { class: 'close', type: 'button', text: '✕', onclick: () => { dialog.close(); } })));
 dialog.appendChild(head);
 dialog.appendChild(el('section', { class: 'sec' },
-el('h3', { text: 'Value build-up — the literal formula, recomputable' }),
+el('h3', { text: 'Value build-up — the literal formula' }),
 el('div', { class: 'hero' }, el('b', { text: fmtUsd(r.implied_value_usd) }), el('span', { text: 'implied launch value (' + D.model_version + ')' })),
-el('p', { class: 'sub', text: 'Bootstrap: rank ' + r.rank_low + '–' + r.rank_high + ' across ' + D.bootstrap.refits + ' refits · implied P25–P75 ' + fmtUsd(r.implied_p25) + '–' + fmtUsd(r.implied_p75) + ' · P10–P90 ' + fmtUsd(r.implied_p10) + '–' + fmtUsd(r.implied_p90) }),
+el('p', { class: 'sub', text: 'Boot: rank ' + r.rank_low + '–' + r.rank_high + ' across ' + D.bootstrap.refits + ' refits · P25–P75 ' + fmtUsd(r.implied_p25) + '–' + fmtUsd(r.implied_p75) + ' · P10–90 ' + fmtUsd(r.implied_p10) + '–' + fmtUsd(r.implied_p90) }),
 el('div', { class: 'equation' },
 el('div', null, el('span', { text: 'TVL (snapshot)' }), el('b', { text: fmtUsd(r.tvl_usd) })),
 el('div', null, el('span', { text: '× multiple — ' + r.multiple_source }), el('b', { text: fmtMult(r.multiple) })),
@@ -298,7 +298,7 @@ el('div', { class: 'result' }, el('span', { text: '= launch value (in-page recom
 el('div', { class: 'equation odds' },
 el('div', null, el('span', { text: '× token odds (peers\u2019 record, logistic)' }), el('b', { text: fmtPct0((D.odds.by_slug && D.odds.by_slug[r.slug]) || D.odds.base_rate) })),
 el('div', { class: 'result' }, el('span', { text: '= value × odds — the launch in expectation' }), el('b', { text: fmtUsd(r.implied_value_usd * ((D.odds.by_slug && D.odds.by_slug[r.slug]) || D.odds.base_rate)) }))),
-el('p', { class: 'footnote honesty', text: 'Honesty: no forecast — the odds are what the snapshot\u2019s own protocols did; implied value is a launch\u2019s size IF one comes.' })));
+el('p', { class: 'footnote honesty', text: 'Honesty: no forecast — the odds are the peers\u2019 record; implied value is a launch\u2019s size IF one comes.' })));
 var steps = farmStepsOf(r);
 var stepsSec = el('section', { class: 'sec' },
 el('h3', { text: 'Farm plan — ' + steps.length + ' steps, each costed and timed' }),
@@ -318,16 +318,16 @@ return td((vv.net >= 0 ? '+' : '') + '$' + Math.round(vv.net), 'num ' + (vv.net 
 sBody.appendChild(el('tr', null, td('$' + dep + ' deposit', 'num'), cells[0], cells[1], cells[2]));
 });
 var sensSec = el('section', { class: 'sec' },
-el('h3', { text: 'Sensitivity — NET $ over the hold, deposit × haircut (all costs included)' }),
+el('h3', { text: 'Sensitivity — NET $ over the hold, deposit × haircut' }),
 table([[''], ['Drop 0%', 'num'], ['Drop 20%', 'num'], ['Drop 40%', 'num']], sBody));
 var compsSec = el('section', { class: 'sec' },
-el('h3', { text: 'Nearest traded comparables — each fitted without itself' }),
+el('h3', { text: 'Nearest traded comparables — each fitted blind' }),
 table([['Peer', 'num'], ['TVL', 'num'], ['Market cap', 'num'], ['mcap/TVL', 'num'], ['Blind fit', 'num'], ['Miss', 'num']],
 el('tbody', null, r.comps.map((c) => {
 return el('tr', null, td(c.name), td(fmtUsd(c.tvl_usd), 'num'), td(fmtUsd(c.mcap_usd), 'num'),
 td(fmtMult(c.ratio), 'num'), td(fmtMult(c.blind_multiple), 'num'), td(c.miss.toFixed(2) + 'x', 'num ' + (c.miss <= 2 ? 'pos' : 'neg')));
 }))),
-el('p', { class: 'footnote', text: 'Each peer\u2019s multiple was fitted from the OTHER peers, never itself; Miss = max(fit/actual, actual/fit).' }));
+el('p', { class: 'footnote', text: 'Each peer\u2019s multiple was fitted from OTHER peers; Miss = max(fit/actual, actual/fit).' }));
 var costSec = el('section', { class: 'sec' },
 el('h3', { text: 'Cost breakdown → one number: NET $/hour' }),
 el('div', { class: 'equation' },
@@ -339,13 +339,13 @@ el('div', null, el('span', { text: '+ reward (implied × odds × ' + (ASSUME.air
 el('div', { class: 'result' }, el('span', { text: '= NET $/hr (' + '$' + (v.net >= 0 ? '+' : '') + v.net.toFixed(2) + ' over ' + Math.round(v.weeks * 168) + 'h)' }), el('b', { text: (v.perHour >= 0 ? '+' : '') + '$' + v.perHour.toFixed(2) + '/h' }))),
 el('p', { class: 'footnote', text: 'Rule: FARM clears $' + ASSUME.farmHourly + '/h; MARGINAL positive under it; SKIP loses money. Here: ' + v.verdict + '.' }));
 var sc = el('section', { class: 'sec' });
-sc.appendChild(el('h3', { text: 'Cap vs TVL — peers, the fitted size curve, this protocol (marked)' }));
+sc.appendChild(el('h3', { text: 'Cap vs TVL — peers, fitted size curve, this protocol (marked)' }));
 scatter(sc, slug);
 var duoA = el('div', { class: 'duo duo-pad' }); duoA.appendChild(dialog.querySelector('.sec')); duoA.appendChild(costSec);
 var duoB = el('div', { class: 'duo duo-pad' }); duoB.appendChild(stepsSec); duoB.appendChild(sensSec);
 var duoC = el('div', { class: 'duo duo-pad' }); duoC.appendChild(compsSec); duoC.appendChild(sc);
 dialog.appendChild(duoA); dialog.appendChild(duoB); dialog.appendChild(duoC);
-dialog.appendChild(el('p', { class: 'footnote detail-foot', text: r.listed_at ? 'Tracked since ' + r.listed_at + '. No token recorded; odds are the peers\u2019 record; costs are estimates. Not financial advice.' : 'No listing date recorded; costs are estimates. Not financial advice.' }));
+dialog.appendChild(el('p', { class: 'footnote detail-foot', text: r.listed_at ? 'Tracked since ' + r.listed_at + '. No token recorded; odds are the peers\u2019 record; costs are estimates. Not advice.' : 'No listing date recorded; costs are estimates. Not advice.' }));
 document.getElementById('dialog-root').appendChild(dialog);
 if (dialog.showModal) dialog.showModal(); else dialog.setAttribute('open', '');
 }
@@ -371,13 +371,13 @@ var keptRow = D.evidence.rows.find((r) => r.kept) || D.evidence.rows[D.evidence.
 return el('section', { class: 'kpi-strip', 'aria-label': 'Key metrics' },
 kpi('Watchlist ranked', k.watchlist_covered + ' / ' + D.watchlist_size, 'of ' + D.board_size + ' rows ranked', 'ok'),
 kpi('Ranked rows', String(D.board_size), 'every watchlist name in', 'ok'),
-kpi('LOO miss', fmtMult(keptRow.loo_miss), 'held-out, median'),
-kpi('WF miss', v.walk_forward ? fmtMult(keptRow.wf_miss) : 'n/a', 'walk-fwd, median'),
+kpi('LOO miss', fmtMult(keptRow.loo_miss), 'held-out median'),
+kpi('WF miss', v.walk_forward ? fmtMult(keptRow.wf_miss) : 'n/a', 'walk-fwd median'),
 kpi('Brier vs base', D.odds.brier_loo.toFixed(3) + ' vs ' + D.odds.brier_base.toFixed(3), 'below baseline', D.odds.brier_loo < D.odds.brier_base ? 'ok' : ''),
-kpi('Coverage P25–P75', fmtPct0(keptRow.cov50), 'of held-out peers in band'),
+kpi('Coverage P25–P75', fmtPct0(keptRow.cov50), 'of held-out peers'),
 kpi('LOO within 2x', fmtPct0(v.loo.within_half), 'held-out peers ±2x'),
-kpi('Caps in P25–P75', fmtPct0(D.bootstrap.cov50), 'held-out caps (stated 50%)', D.bootstrap.cov50 >= 0.5 ? 'ok' : ''),
-kpi('Caps in P10–P90', fmtPct0(D.bootstrap.cov80), 'held-out caps (stated 80%)', D.bootstrap.cov80 >= 0.8 ? 'ok' : ''),
+kpi('Caps in P25–P75', fmtPct0(D.bootstrap.cov50), 'held-out caps (stated 50%) · infl ×' + D.bootstrap.inflation, D.bootstrap.cov50 >= 0.45 ? 'ok' : ''),
+kpi('Caps in P10–P90', fmtPct0(D.bootstrap.cov80), 'held-out caps (stated 80%)', D.bootstrap.cov80 >= 0.7 ? 'ok' : ''),
 kpi('Implied value, total', fmtUsd(k.implied_total_usd), 'board total', 'ok'));
 }
 function render() {

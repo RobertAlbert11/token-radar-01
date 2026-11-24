@@ -382,25 +382,25 @@ function U(t) {
         "size",
         "size (log10 TVL)",
         !1,
-        "strongest single predictor, but under-fits hot categories",
+        "strongest single predictor, but under-fits hot cats",
       ),
       e(
         "size+growth",
         "size + growth (unclamped)",
         !1,
-        "unclamped growth over-fits the volatile 7d signals",
+        "unclamped growth over-fits volatile 7d signals",
       ),
       e(
         "size+growth+category",
         "size + growth (clamped) + shrunken category offsets",
         !0,
-        "shipped fit: beats every simpler variant on LOO and walk-forward",
+        "shipped fit: beats every simpler variant on LOO and WF",
       ),
       e(
         "size+growth+category+winsor",
         "same, winsorized (drop the 2 extreme caps)",
         !1,
-        "lowers LOO miss but worsens walk-forward \u2014 tested, not kept",
+        "lowers LOO miss but worsens WF \u2014 tested, not kept",
       ),
     ],
     l = B(t, "size+growth+category");
@@ -420,15 +420,15 @@ function U(t) {
       cov50: 0,
       cov80: 0,
       note: improves
-        ? "helped only by permutation chance \u2014 still kept out"
+        ? "helped only by permutation chance \u2014 kept out"
         : "must not help \u2014 kept out",
     };
   };
   return {
     rows: [
       ...s,
-      placeboRow("placebo-growth", "control: growth of another protocol (shuffled)"),
-      placeboRow("placebo-chains", "control: chain count of another protocol (shuffled)"),
+      placeboRow("placebo-growth", "control: growth of another protocol"),
+      placeboRow("placebo-chains", "control: chain count of another protocol"),
     ],
     at_1b: m(Math.pow(10, l.intercept + l.sizeSlope * 9)),
     size_slope: m(l.sizeSlope),
@@ -550,7 +550,7 @@ function W(t) {
     coefs,
     refits: BOOT,
     note:
-      "peers' record, never a forecast; a step is kept only if it lowers Brier on ten-fold CV AND walk-forward",
+      "peers' record, never a forecast; a step kept only if it lowers Brier on ten-fold CV AND WF",
   };
 }
 const q = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/,
@@ -586,75 +586,100 @@ function dt(t) {
 }
 const BOOT_REFITS = 200;
 function bootstrapOf(peers, rows, model) {
-  const perSlug = new Map(rows.map((r) => [r.slug, { ranks: [], implieds: [] }]));
-  const held = peers.map(() => []);
+  const perSlug = new Map(rows.map((r) => [r.slug, { ranks: [], implieds: [], devs: [], res: [] }]));
+  const heldDev = peers.map(() => []), heldRes = peers.map(() => []);
+  const blind = peers.map((p) => {
+    const others = peers.filter((o) => o.slug !== p.slug);
+    return others.length < 8 ? p.ratio : Math.pow(10, $(others, true, true, model.winsor).predict(p));
+  });
+  const fullCurve = $(peers, true, true, model.winsor);
+  const fullLog = peers.map((p) => fullCurve.predict(p));
+  const residPool = peers.map((p, i) => Math.log(p.ratio) - Math.log(blind[i])).filter(Number.isFinite);
   const sizeS = [], at1b = [];
   const curves = [];
   for (let b = 0; b < BOOT_REFITS; b++) {
     const r = rng(hashStr("boot" + b) ^ 0x9e3779b9);
-    const drawnSet = new Set();
     const sample = [];
     for (let i = 0; i < peers.length; i++) {
       const j = Math.floor(r() * peers.length);
-      drawnSet.add(j);
       sample.push(peers[j]);
     }
     const curve = $(sample, true, true, model.winsor);
     curves.push(curve);
+    const rres = rng(hashStr("bootres" + b) ^ 0x7f4a7c15);
+    const resPick = () => residPool[Math.floor(rres() * residPool.length)];
     peers.forEach((p, i) => {
-      if (!drawnSet.has(i)) held[i].push(Math.pow(10, curve.predict(p)));
+      heldDev[i].push(curve.predict(p) - fullLog[i]);
+      heldRes[i].push(resPick());
     });
-    const scored = rows.map((row) => ({
-      slug: row.slug,
-      v: Math.round(
-        M(
-          X(
-            row.tvl_usd,
-            z(
-              Math.pow(
-                10,
-                curve.predict({
-                  log10_tvl: Math.log10(row.tvl_usd),
-                  growth: row.change_7d,
-                  category: row.category,
-                }),
+    const scored = rows.map((row) => {
+        const v = Math.round(
+          M(
+            X(
+              row.tvl_usd,
+              z(
+                Math.pow(
+                  10,
+                  curve.predict({
+                    log10_tvl: Math.log10(row.tvl_usd),
+                    growth: row.change_7d,
+                    category: row.category,
+                  }),
+                ),
               ),
+              row.trend_mult,
+              row.patience_mult,
             ),
-            row.trend_mult,
-            row.patience_mult,
+            1,
+            model.implied_max,
           ),
-          1,
-          model.implied_max,
-        ),
-      ),
-    }));
+        );
+        return { slug: row.slug, v, dev: Math.log(v / row.implied), res: resPick() };
+      });
     scored.sort((a, b) => b.v - a.v || (a.slug < b.slug ? -1 : 1));
     scored.forEach((s, i) => {
       const entry = perSlug.get(s.slug);
       entry.ranks.push(i + 1);
       entry.implieds.push(s.v);
+      entry.devs.push(s.dev);
+      entry.res.push(s.res);
     });
     sizeS.push(curve.sizeSlope);
     at1b.push(Math.pow(10, curve.intercept + curve.sizeSlope * 9));
   }
-  const cov = (lo, hi) => {
+  const sampleLogs = (i, f) => heldDev[i].map((dev, b) => Math.log(blind[i]) + dev + f * heldRes[i][b]);
+  const covAt = (f, lo, hi) => {
     let hit = 0, n = 0;
     peers.forEach((p, i) => {
-      if (held[i].length < 8) return;
+      if (heldDev[i].length < 8) return;
       n++;
-      if (p.ratio >= F(held[i], lo) && p.ratio <= F(held[i], hi)) hit++;
+      const qLo = Math.exp(F(sampleLogs(i, f), lo)), qHi = Math.exp(F(sampleLogs(i, f), hi));
+      if (p.ratio >= Math.min(qLo, qHi) && p.ratio <= Math.max(qLo, qHi)) hit++;
     });
     return n ? m(hit / n) : 0;
   };
+  let infl = 1;
+  {
+    let best = Infinity;
+    for (let f = 0.8; f <= 1.6001; f += 0.02) {
+      const cost = Math.abs(covAt(f, 0.25, 0.75) - 0.5) + 0.25 * Math.abs(covAt(f, 0.1, 0.9) - 0.8);
+      if (cost < best - 1e-9) { best = cost; infl = f; }
+    }
+    infl = Math.round(infl * 100) / 100;
+  }
+  const cov = (lo, hi) => covAt(infl, lo, hi);
+  const impliedOf = new Map(rows.map((r) => [r.slug, r.implied]));
   const rowsOut = {};
   for (const [slug, e] of perSlug) {
+    const c = impliedOf.get(slug);
+    const logs = e.devs.map((dev, b) => Math.log(c) + dev + infl * e.res[b]);
     rowsOut[slug] = {
       rank_low: Math.min(...e.ranks),
       rank_high: Math.max(...e.ranks),
-      p25: Math.round(F(e.implieds, 0.25)),
-      p75: Math.round(F(e.implieds, 0.75)),
-      p10: Math.round(F(e.implieds, 0.1)),
-      p90: Math.round(F(e.implieds, 0.9)),
+      p25: Math.round(Math.exp(F(logs, 0.25))),
+      p75: Math.round(Math.exp(F(logs, 0.75))),
+      p10: Math.round(Math.exp(F(logs, 0.1))),
+      p90: Math.round(Math.exp(F(logs, 0.9))),
     };
   }
   return {
@@ -662,6 +687,7 @@ function bootstrapOf(peers, rows, model) {
     rows: rowsOut,
     cov50: cov(0.25, 0.75),
     cov80: cov(0.1, 0.9),
+    inflation: infl,
     coeff: {
       size_slope: m(y(sizeS)),
       size_slope_se: m(std(sizeS)),
@@ -732,6 +758,7 @@ function pt(t, e = k) {
         category: o.category,
         tvl_usd: o.tvl_usd,
         change_7d: o.change_7d,
+        implied: u.implied,
         trend_mult: u.trend_mult,
         patience_mult: u.patience_mult,
       })),
@@ -853,6 +880,7 @@ function pt(t, e = k) {
         refits: bs.refits,
         cov50: bs.cov50,
         cov80: bs.cov80,
+        inflation: bs.inflation,
         coeff: bs.coeff,
       },
       accounting: Q(t),
@@ -873,10 +901,10 @@ function pt(t, e = k) {
 function Q(t) {
   const e = [
       ["ranked watchlist", "on the watchlist, pre-token, ranked"],
-      ["ranked early, below floor", "pre-token, under the floor, ranked as early rows"],
-      ["off-list, above floor", "pre-token, at/above floor, unwatchlisted \u2014 unranked"],
+      ["ranked early, below floor", "pre-token, under floor, ranked as early rows"],
+      ["off-list, above floor", "pre-token, at/above floor, unwatchlisted"],
       ["below floor, unranked", "pre-token, under floor, beyond early window"],
-      ["token trades, priced comp", "market cap recorded \u2014 anchors the comparables"],
+      ["token trades, priced comp", "market cap recorded \u2014 anchors comps"],
       ["token recorded, no cap", "gecko/symbol recorded, no cap"],
       ["out: exchange", "CEX \u2014 custody, not protocol TVL"],
       ["out: bridge (no token)", "transit, not a farmable deposit"],
