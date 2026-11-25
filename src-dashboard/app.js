@@ -4,7 +4,8 @@ var D = window.RADAR;
 if (!D) return;
 var app = document.getElementById('app');
 var state = { q: '', cat: 'all', chain: 'all', list: 'all', sel: null,
-deposit: null, drop: 0, horizon: null, preset: null };
+deposit: null, drop: 0, horizon: null, preset: null,
+sortKey: 'rank', sortDir: 1, tvlMin: null, tvlMax: null };
 function fmtUsd(n) {
 if (n === null || n === undefined || !isFinite(n)) return 'n/a';
 var neg = n < 0 ? '-' : ''; n = Math.abs(n);
@@ -209,6 +210,16 @@ var hor = el('select', { id: 'hor' },
 [null, 30, 60, 90].map((d) => { return el('option', { value: d === null ? '' : String(d), text: d === null ? 'Default hold' : d + '-day hold' }); }));
 hor.value = state.horizon === null ? '' : String(state.horizon);
 hor.addEventListener('change', () => { state.horizon = hor.value ? Number(hor.value) : null; render(); });
+var tvl = el('select', { id: 'tvl' },
+[['', 'Any TVL'], ['1000000', '≥ $1M'], ['10000000', '≥ $10M'], ['100000000', '≥ $100M'], ['max:100000000', '< $100M'], ['max:10000000', '< $10M']].map((o) => { return el('option', { value: o[0], text: o[1] }); }));
+tvl.value = (state.tvlMax !== null ? 'max:' + state.tvlMax : state.tvlMin !== null ? String(state.tvlMin) : '');
+tvl.addEventListener('change', () => {
+var v = tvl.value;
+if (!v) { state.tvlMin = null; state.tvlMax = null; }
+else if (v.indexOf('max:') === 0) { state.tvlMin = null; state.tvlMax = Number(v.slice(4)); }
+else { state.tvlMin = Number(v); state.tvlMax = null; }
+render();
+});
 function chip(key, label, preset) {
 return el('button', { class: 'chip', type: 'button', 'aria-pressed': state.list === key ? 'true' : 'false', text: label,
 onclick: () => { state.list = key; if (preset) Object.assign(state, preset); render(); } });
@@ -220,6 +231,7 @@ el('div', { class: 'field' }, el('label', { for: 'chain', text: 'Chain' }), chai
 el('div', { class: 'field' }, el('label', { for: 'dep', text: 'Deposit' }), dep),
 el('div', { class: 'field' }, el('label', { for: 'drop', text: 'Reward' }), drop),
 el('div', { class: 'field' }, el('label', { for: 'hor', text: 'Horizon' }), hor),
+el('div', { class: 'field' }, el('label', { for: 'tvl', text: 'TVL' }), tvl),
 el('div', { class: 'field' }, el('span', { class: 'label', text: 'Presets' }),
 el('div', { class: 'chips' },
 chip('all', 'All rows'), chip('watchlist', 'Watchlist'),
@@ -238,34 +250,93 @@ if (state.cat !== 'all' && (r.category || 'Uncategorized') !== state.cat) return
 if (state.chain !== 'all' && r.chains.indexOf(state.chain) < 0) return false;
 if (state.list === 'watchlist' && !r.on_watchlist) return false;
 if (state.list === 'farm' || state.list === 'growth') { if (!presetFilter(r)) return false; }
+if (state.tvlMin !== null && r.tvl_usd < state.tvlMin) return false;
+if (state.tvlMax !== null && r.tvl_usd > state.tvlMax) return false;
 if (!q) return true;
 return [r.name, r.slug, r.category, r.chains.join(' ')].join(' ').toLowerCase().indexOf(q) >= 0;
 });
 }
+function sortVal(r, key) {
+if (key === 'rank') return r.rank;
+if (key === 'name') return (r.name || '').toLowerCase();
+if (key === 'tvl') return r.tvl_usd;
+if (key === 'chg') return r.change_7d === null ? -Infinity : r.change_7d;
+if (key === 'age') return r.age_days === null ? -Infinity : r.age_days;
+if (key === 'imp') return r.implied_value_usd;
+if (key === 'p25') return r.implied_p25;
+if (key === 'p10') return r.implied_p10;
+if (key === 'net') return verdictOf(r).perHour;
+return r.rank;
+}
+function sortList(list) {
+var k = state.sortKey, d = state.sortDir;
+return list.slice().sort((a, b) => {
+var va = sortVal(a, k), vb = sortVal(b, k);
+return (va < vb ? -1 : va > vb ? 1 : a.rank - b.rank) * d;
+});
+}
+function activeFilterChips() {
+var chips = [];
+function chip(label, cls) { chips.push(el('span', { class: 'afchip ' + (cls || ''), text: label })); }
+if (state.q.trim()) chip('search: "' + state.q.trim() + '"');
+if (state.cat !== 'all') chip('category: ' + state.cat);
+if (state.chain !== 'all') chip('chain: ' + state.chain);
+if (state.list === 'watchlist') chip('watchlist only', 'gold');
+if (state.preset === 'farm') chip('verdict: FARM', 'ok');
+if (state.preset === 'growth') chip('7d growth ≥10%', 'ok');
+if (state.tvlMin !== null || state.tvlMax !== null)
+chip('TVL: ' + (state.tvlMin !== null ? fmtUsd(state.tvlMin) : '$0') + '–' + (state.tvlMax !== null ? fmtUsd(state.tvlMax) : '∞'));
+if (!chips.length) chip('no active filters — full board', 'muted');
+return el('div', { class: 'filter-summary' },
+el('span', { class: 'fs-label', text: 'FILTERS' }), chips);
+}
 function boardTable() {
-var list = filtered();
+var list = sortList(filtered());
 var max = Math.max.apply(null, list.map((r) => r.implied_value_usd)) || 1;
+var pMax = Math.max.apply(null, list.map((r) => r.implied_p90)) || 1;
 var tbody = el('tbody');
 list.forEach((r) => {
 var v = verdictOf(r);
+var cat = r.category || 'Uncategorized';
+var w = (a, b) => Math.max(1.5, Math.round((a / pMax) * 100));
+var chg = r.change_7d;
+var chgCls = chg === null ? 'sub' : chg >= 0 ? 'pos' : 'neg';
 tbody.appendChild(el('tr', { tabindex: '0', onclick: () => { openDetail(r.slug); },
 onkeydown: (e) => { if (e.key === 'Enter') openDetail(r.slug); } },
-td(r.rank, 'num'),
-el('td', null, el('b', { text: r.name }), el('span', { class: 'sub', text: (r.category || 'Uncategorized') + ' · ' + r.chains.slice(0, 2).join(', ') })),
+td(r.rank, 'num rank'),
+el('td', { class: 'protocell' },
+el('span', { class: 'star' + (r.on_watchlist ? ' on' : ''), text: r.on_watchlist ? '★' : '☆' }),
+el('span', { class: 'pwrap' }, el('b', { text: r.name }),
+el('span', { class: 'chipline' }, el('span', { class: 'catchip', text: cat }),
+r.chains.slice(0, 2).map((c) => el('span', { class: 'chainchip', text: c }))))),
 td(fmtUsd(r.tvl_usd), 'num'),
-td(fmtPct(r.change_7d), 'num ' + ((r.change_7d || 0) >= 0 ? 'pos' : 'neg')),
-td(fmtAge(r.age_days), 'num'),
-el('td', null, el('div', { class: 'implied' },
+el('td', { class: 'num ' + chgCls, text: chg === null ? 'n/a' : fmtPct(chg) }),
+td(fmtAge(r.age_days), 'num sub'),
+el('td', { class: 'impcell' },
 el('div', { class: 'bar' }, el('i', { style: 'width:' + Math.max(2, Math.round(r.implied_value_usd / max * 100)) + '%' })),
-el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) }))),
-td(fmtUsd(r.implied_p25) + '–' + fmtUsd(r.implied_p75) + ' / ' + fmtUsd(r.implied_p10) + '–' + fmtUsd(r.implied_p90), 'num'),
+el('span', { class: 'num gold', text: fmtUsd(r.implied_value_usd) })),
+el('td', { class: 'rangecell' },
+el('div', { class: 'rangebar' },
+el('i', { class: 'r80', style: 'left:' + Math.max(0, Math.round(r.implied_p10 / pMax * 100)) + '%;width:' + Math.max(2, Math.round((r.implied_p90 - r.implied_p10) / pMax * 100)) + '%' }),
+el('i', { class: 'r50', style: 'left:' + Math.max(0, Math.round(r.implied_p25 / pMax * 100)) + '%;width:' + Math.max(2, Math.round((r.implied_p75 - r.implied_p25) / pMax * 100)) + '%' })),
+el('span', { class: 'num rng', text: fmtUsd(r.implied_p25) + '–' + fmtUsd(r.implied_p75) })),
 td(v.verdict, 'num ' + v.verdict.toLowerCase()),
-td((v.perHour >= 0 ? '+' : '') + '$' + v.perHour.toFixed(2) + '/h', 'num'),
-td(r.on_watchlist ? 'watchlist' : 'early', 'num')));
+td((v.perHour >= 0 ? '+' : '') + '$' + v.perHour.toFixed(2) + '/h', 'num ' + (v.perHour >= 0 ? 'pos' : 'neg'))));
 });
+var cols = [['rank', '#'], ['name', 'Protocol'], ['tvl', 'TVL'], ['chg', '7d'], ['age', 'Age'],
+['imp', 'Implied value'], ['p25', 'P25–P75 conf. range (P10–P90 track)'], ['net', 'NET $/h']];
+var thead = el('thead', null, el('tr', null, cols.map((c) => {
+var active = state.sortKey === c[0];
+return el('th', { scope: 'col', class: (c[1] === 'Protocol' ? '' : 'num') + (active ? ' sorted' : ''),
+onclick: () => { if (state.sortKey === c[0]) state.sortDir = -state.sortDir;
+else { state.sortKey = c[0]; state.sortDir = c[0] === 'rank' ? 1 : -1; } render(); },
+'text': c[1] + (active ? (state.sortDir === 1 ? ' ▲' : ' ▼') : '') });
+})));
 return el('div', { class: 'panel' },
-el('p', { class: 'caption', text: 'Ranked by implied launch value — fitted from the snapshot\u2019s comparables. Boot columns: ranges across ' + D.bootstrap.refits + ' peer resamples, inflation ×' + D.bootstrap.inflation + ' fitted on held-out peers (blind, leave-self-out). NET $/h recomputes live with deposit, haircut, horizon. Select a row for build-up, farm plan, comps, sensitivity.' }),
-table([['#'], ['Protocol'], ['TVL', 'num'], ['7d', 'num'], ['Age', 'num'], ['Implied value'], ['P25–75 / P10–90 (boot)', 'num'], ['Verdict', 'num'], ['NET $/h', 'num'], ['List', 'num']], tbody));
+activeFilterChips(),
+el('p', { class: 'caption', text: list.length + ' of ' + D.rows.length + ' protocols · ranked by implied launch value · ranges across ' + D.bootstrap.refits + ' bootstrap refits · click a row for build-up, farm plan, comps, sensitivity.' }),
+el('div', { class: 'table-wrap sticky' },
+el('table', { class: 'board' }, thead, tbody)));
 }
 function openDetail(slug) {
 var r = null;
@@ -287,7 +358,14 @@ el('button', { class: 'close', type: 'button', text: '✕', onclick: () => { dia
 dialog.appendChild(head);
 dialog.appendChild(el('section', { class: 'sec' },
 el('h3', { text: 'Value build-up — the literal formula' }),
-el('div', { class: 'hero' }, el('b', { text: fmtUsd(r.implied_value_usd) }), el('span', { text: 'implied launch value (' + D.model_version + ')' })),
+el('div', { class: 'hero' }, el('b', { class: 'gold', text: fmtUsd(r.implied_value_usd) }), el('span', { text: 'implied launch value (' + D.model_version + ')' })),
+el('div', { class: 'rangebar hero-range' },
+el('i', { class: 'r80', style: 'left:' + Math.round(r.implied_p10 / r.implied_value_usd * 60) + '%;width:' + Math.max(3, Math.round((r.implied_p90 - r.implied_p10) / r.implied_value_usd * 60)) + '%' }),
+el('i', { class: 'r50', style: 'left:' + Math.round(r.implied_p25 / r.implied_value_usd * 60) + '%;width:' + Math.max(4, Math.round((r.implied_p75 - r.implied_p25) / r.implied_value_usd * 60)) + '%' })),
+el('div', { class: 'range-legend' },
+el('span', null, el('i', { class: 'sw r50' }), ' P25–P75: ' + fmtUsd(r.implied_p25) + '–' + fmtUsd(r.implied_p75)),
+el('span', null, el('i', { class: 'sw r80' }), ' P10–P90: ' + fmtUsd(r.implied_p10) + '–' + fmtUsd(r.implied_p90)),
+el('span', { class: 'sub', text: 'boot rank ' + r.rank_low + '–' + r.rank_high })),
 el('p', { class: 'sub', text: 'Boot: rank ' + r.rank_low + '–' + r.rank_high + ' across ' + D.bootstrap.refits + ' refits · P25–P75 ' + fmtUsd(r.implied_p25) + '–' + fmtUsd(r.implied_p75) + ' · P10–90 ' + fmtUsd(r.implied_p10) + '–' + fmtUsd(r.implied_p90) }),
 el('div', { class: 'equation' },
 el('div', null, el('span', { text: 'TVL (snapshot)' }), el('b', { text: fmtUsd(r.tvl_usd) })),
